@@ -22,6 +22,11 @@ def main():
         st.caption(
             f"※ 1億円ペースの理想NISA積立：{summary['ideal_nisa']:,} 円 / 月"
         )
+        st.caption(
+    f"※ 現在資産：{current_asset:,} 円 / "
+    f"理想資産：{ideal_asset_today:,} 円 "
+    f"（差分 {asset_gap:,} 円）"
+)
 
 #imports & ページ設定
 import streamlit as st
@@ -152,6 +157,11 @@ def calculate_monthly_summary_dummy():
     surplus -= bank_save
 
     free_money = surplus
+    
+    current_asset = 3_000_000      # 現在資産（仮）
+    ideal_asset_today = 3_500_000  # 本来あるべき資産（仮）
+
+    asset_gap = current_asset - ideal_asset_today
 
     return {
         "nisa_save": nisa_save,
@@ -160,6 +170,7 @@ def calculate_monthly_summary_dummy():
         "free_money": free_money,
         "nisa_mode": nisa_mode
     }
+
 
 
 #NISAの積立額を決める関数
@@ -205,6 +216,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
