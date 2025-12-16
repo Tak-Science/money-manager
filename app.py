@@ -10,7 +10,7 @@ from googleapiclient.discovery import build
 st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SPREADSHEET_URL = "ここにあなたのスプレッドシートURL"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=2102244245#gid=2102244245"
 
 # ==============================
 # Google Sheets 接続
@@ -167,3 +167,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
