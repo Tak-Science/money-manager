@@ -31,7 +31,12 @@ def calculate_monthly_summary(
     monthly_fix_cost = active_fix["金額"].sum()
 
     # --- 変動費 ---
-    df_forms["month"] = df_forms["日付"].dt.strftime("%Y-%m")
+    df_forms_tmp = df_forms.copy()
+    df_forms_tmp["month"] = df_forms_tmp["日付"].dt.strftime("%Y-%m")
+
+    monthly_variable_cost = (
+    df_forms_tmp[df_forms_tmp["month"] == current_month]["金額"].sum()
+    )
     monthly_variable_cost = (
         df_forms[df_forms["month"] == current_month]["金額"].sum()
     )
@@ -51,12 +56,17 @@ def calculate_monthly_summary(
     current_asset = df_balance.iloc[-1]["total_asset"]
 
     # --- 過去平均との差 ---
-    df_balance["monthly_diff"] = df_balance["total_asset"].diff()
+    past_avg = df_balance["monthly_diff"].tail(12).mean()
+    if pd.isna(past_avg):
+    past_avg = 0
     past_avg = df_balance["monthly_diff"].tail(12).mean()
     diff_from_past = realistic_save - past_avg
 
     # --- 1億円ペース ---
-    years_left = 60 - today.year
+    current_age = get_latest_parameter(df_params, "現在年齢", today)
+    retire_age = get_latest_parameter(df_params, "老後年齢", today)
+
+    years_left = retire_age - current_age
     months_left = max(years_left * 12, 1)
     ideal_save = (target_asset - current_asset) / months_left
     diff_from_ideal = realistic_save - ideal_save
@@ -111,3 +121,4 @@ def main():
         st.write(f"固定費：{int(summary['fix_cost']):,} 円")
         st.write(f"変動費：{int(summary['variable_cost']):,} 円")
         st.write(f"理想積立額（1億円）：{int(summary['ideal_save']):,} 円 / 月")
+
