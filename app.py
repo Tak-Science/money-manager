@@ -1,6 +1,19 @@
-#今月のサマリ
+#mainの設定
 def main():
     st.title("💰 今月サマリー")
+
+    col1, col2, col3 = st.columns(3)
+
+    with col1:
+        st.metric("銀行への積立", "30,000 円")
+
+    with col2:
+        st.metric("NISA積立", "20,000 円")
+
+    with col3:
+        st.metric("自由に使えるお金", "15,000 円")
+
+    st.caption("※ 1億円ペースとの差：-30,000 円")
 
 #imports & ページ設定
 import streamlit as st
@@ -103,4 +116,5 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
 
 if __name__ == "__main__":
     main()
+
 
