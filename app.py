@@ -109,7 +109,6 @@ def calculate_monthly_variable_cost(df_forms, today):
     current_month = today.strftime("%Y-%m")
     df["month"] = df["日付"].dt.strftime("%Y-%m")
 
-    # 支出カテゴリ（必要に応じて追加OK）
     expense_categories = [
         "食費（外食・交際）",
         "食費（日常）",
@@ -126,7 +125,7 @@ def calculate_monthly_variable_cost(df_forms, today):
     ]["金額"].sum()
 
 # ==================================================
-# 変動収入（Forms_Log：臨時収入・バイト代）
+# 変動収入（Forms_Log：臨時収入）
 # ==================================================
 def calculate_monthly_variable_income(df_forms, today):
     if df_forms.empty:
@@ -169,13 +168,11 @@ def calculate_nisa_amount(
 
     if mode == "A":
         nisa = min_nisa
-
     elif mode == "B":
         years_left = max(retire_age - current_age, 1)
         months_left = years_left * 12
         ideal = (target_asset - current_asset) / months_left
         nisa = max(min(ideal, max_nisa), min_nisa)
-
     else:  # モードC
         nisa = max(min(available_cash, max_nisa), min_nisa)
 
@@ -183,6 +180,42 @@ def calculate_nisa_amount(
     nisa = max(min(nisa, available_cash), 0)
 
     return nisa, mode
+
+# ==================================================
+# 満足度が低い支出の分析
+# ==================================================
+def analyze_low_satisfaction_expenses(df_forms, today):
+    if df_forms.empty:
+        return pd.DataFrame()
+
+    df = df_forms.copy()
+    df["日付"] = pd.to_datetime(df["日付"])
+    df["金額"] = df["金額"].astype(float)
+    df["満足度"] = pd.to_numeric(df["満足度"], errors="coerce")
+
+    current_month = today.strftime("%Y-%m")
+    df["month"] = df["日付"].dt.strftime("%Y-%m")
+
+    low_df = df[
+        (df["month"] == current_month) &
+        (df["満足度"] <= 2)
+    ]
+
+    if low_df.empty:
+        return pd.DataFrame()
+
+    summary = (
+        low_df
+        .groupby("費目", as_index=False)
+        .agg(
+            合計金額=("金額", "sum"),
+            回数=("金額", "count"),
+            平均満足度=("満足度", "mean")
+        )
+        .sort_values("合計金額", ascending=False)
+    )
+
+    return summary
 
 # ==================================================
 # 今月サマリー
@@ -194,14 +227,10 @@ def calculate_monthly_summary(
     df_balance,
     today
 ):
-    # ベース月収
     base_income = float(
         get_latest_parameter(df_params, "月収", today)
     )
-
-    # 臨時収入
     variable_income = calculate_monthly_variable_income(df_forms, today)
-
     monthly_income = base_income + variable_income
 
     fix_cost = calculate_monthly_fix_cost(df_fix, today)
@@ -211,7 +240,6 @@ def calculate_monthly_summary(
         monthly_income - fix_cost - variable_cost, 0
     )
 
-    # 現在資産
     df_balance = df_balance.copy()
     df_balance["日付"] = pd.to_datetime(df_balance["日付"])
     df_balance["銀行残高"] = df_balance["銀行残高"].astype(float)
@@ -287,6 +315,26 @@ def main():
     st.caption(
         f"※ 現在資産：{int(summary['current_asset']):,} 円"
     )
+
+    # 振り返り
+    st.subheader("🧠 今月の振り返り（満足度が低めだった支出）")
+
+    low_sat_df = analyze_low_satisfaction_expenses(df_forms, today)
+
+    if low_sat_df.empty:
+        st.success("🎉 今月は満足度の低い支出は特にありませんでした！")
+    else:
+        st.caption(
+            "※ 満足度 1〜2 の支出を集計しています。"
+            "次に余裕がない月の参考にしてください。"
+        )
+        st.dataframe(
+            low_sat_df.style.format({
+                "合計金額": "{:,.0f} 円",
+                "平均満足度": "{:.1f}"
+            }),
+            use_container_width=True
+        )
 
 # ==================================================
 # 実行
