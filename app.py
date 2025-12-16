@@ -97,3 +97,6 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
         "variable_cost": variable_cost,
     }
 
+
+if __name__ == "__main__":
+    main()
