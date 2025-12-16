@@ -558,20 +558,34 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
 def main():
     st.title("💰 今月サマリー")
 
-    df_params, df_fix, df_forms, df_balance = load_data()
-    today = datetime.today()
+    # ① データ読み込み
+    df_params, df_fix, df_balance, df_forms, df_goals = load_data()
 
-    summary = calculate_monthly_summary(
-        df_params, df_fix, df_forms, df_balance, today
+    # ② 前処理（ある場合）
+    df_params, df_fix, df_balance, df_forms, df_goals = preprocess_data(
+        df_params, df_fix, df_balance, df_forms, df_goals
     )
 
-col1, col2, col3 = st.columns(3)
+    today = datetime.today()
 
-# 元の計算結果
-bank_save = summary["bank_save"]
-nisa_save = summary["nisa_save"]
-free_cash = summary["free_cash"]
-nisa_mode = summary["nisa_mode"]
+    # ③ ★ここで summary を作る（超重要）
+    summary = calculate_monthly_summary(
+        df_params,
+        df_fix,
+        df_balance,
+        df_forms,
+        today
+    )
+
+    if summary is None:
+        st.warning("今月サマリーを計算できませんでした")
+        return
+
+    # ④ ここから先で summary を使う
+    bank_save = summary["bank_save"]
+    nisa_save = summary["nisa_save"]
+    free_cash = summary["free_cash"]
+    nisa_mode = summary["nisa_mode"]
 
 # 生活防衛費に基づく NISA 調整（ブレーキ）
 safe_cash = get_latest_bank_balance(df_balance)
@@ -802,6 +816,7 @@ if deficit is not None:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
