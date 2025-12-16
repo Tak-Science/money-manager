@@ -16,7 +16,7 @@ st.set_page_config(
 # Google Sheets 設定
 # ==================================================
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=2102244245#gid=2102244245"
+SPREADSHEET_URL = "ここにあなたのGoogleスプレッドシートURL"
 
 # ==================================================
 # Google Sheets 接続
@@ -96,7 +96,7 @@ def calculate_monthly_fix_cost(df_fix, today):
     return active["金額"].sum()
 
 # ==================================================
-# 変動費（Forms_Log：支出）
+# 変動費（支出）
 # ==================================================
 def calculate_monthly_variable_cost(df_forms, today):
     if df_forms.empty:
@@ -125,7 +125,7 @@ def calculate_monthly_variable_cost(df_forms, today):
     ]["金額"].sum()
 
 # ==================================================
-# 変動収入（Forms_Log：臨時収入）
+# 変動収入（臨時収入・バイト代）
 # ==================================================
 def calculate_monthly_variable_income(df_forms, today):
     if df_forms.empty:
@@ -138,10 +138,7 @@ def calculate_monthly_variable_income(df_forms, today):
     current_month = today.strftime("%Y-%m")
     df["month"] = df["日付"].dt.strftime("%Y-%m")
 
-    income_categories = [
-        "給与・バイト代",
-        "臨時収入"
-    ]
+    income_categories = ["給与・バイト代", "臨時収入"]
 
     return df[
         (df["month"] == current_month) &
@@ -151,12 +148,7 @@ def calculate_monthly_variable_income(df_forms, today):
 # ==================================================
 # NISA 積立計算（A / B / C）
 # ==================================================
-def calculate_nisa_amount(
-    df_params,
-    today,
-    available_cash,
-    current_asset
-):
+def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     mode = get_latest_parameter(df_params, "NISA積立モード", today)
 
     min_nisa = float(get_latest_parameter(df_params, "NISA最低積立額", today))
@@ -164,7 +156,7 @@ def calculate_nisa_amount(
     target_asset = float(get_latest_parameter(df_params, "目標資産額", today))
     retire_age = float(get_latest_parameter(df_params, "老後年齢", today))
 
-    current_age = 20  # Profile未導入のため仮
+    current_age = 20  # 仮（Profile 未導入）
 
     if mode == "A":
         nisa = min_nisa
@@ -173,7 +165,7 @@ def calculate_nisa_amount(
         months_left = years_left * 12
         ideal = (target_asset - current_asset) / months_left
         nisa = max(min(ideal, max_nisa), min_nisa)
-    else:  # モードC
+    else:  # モード C
         nisa = max(min(available_cash, max_nisa), min_nisa)
 
     # ★ 余剰を超えない
@@ -182,7 +174,27 @@ def calculate_nisa_amount(
     return nisa, mode
 
 # ==================================================
-# 満足度が低い支出の分析
+# 赤字分析
+# ==================================================
+def analyze_deficit(monthly_income, fix_cost, variable_cost):
+    deficit = monthly_income - fix_cost - variable_cost
+    if deficit >= 0:
+        return None
+
+    if fix_cost > monthly_income:
+        cause = "固定費"
+    elif variable_cost > monthly_income * 0.3:
+        cause = "変動費"
+    else:
+        cause = "複合要因"
+
+    return {
+        "amount": abs(deficit),
+        "cause": cause
+    }
+
+# ==================================================
+# 満足度が低い支出分析
 # ==================================================
 def analyze_low_satisfaction_expenses(df_forms, today):
     if df_forms.empty:
@@ -204,7 +216,7 @@ def analyze_low_satisfaction_expenses(df_forms, today):
     if low_df.empty:
         return pd.DataFrame()
 
-    summary = (
+    return (
         low_df
         .groupby("費目", as_index=False)
         .agg(
@@ -215,30 +227,18 @@ def analyze_low_satisfaction_expenses(df_forms, today):
         .sort_values("合計金額", ascending=False)
     )
 
-    return summary
-
 # ==================================================
-# 今月サマリー
+# 今月サマリー計算
 # ==================================================
-def calculate_monthly_summary(
-    df_params,
-    df_fix,
-    df_forms,
-    df_balance,
-    today
-):
-    base_income = float(
-        get_latest_parameter(df_params, "月収", today)
-    )
+def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
+    base_income = float(get_latest_parameter(df_params, "月収", today))
     variable_income = calculate_monthly_variable_income(df_forms, today)
     monthly_income = base_income + variable_income
 
     fix_cost = calculate_monthly_fix_cost(df_fix, today)
     variable_cost = calculate_monthly_variable_cost(df_forms, today)
 
-    available_cash = max(
-        monthly_income - fix_cost - variable_cost, 0
-    )
+    available_cash = max(monthly_income - fix_cost - variable_cost, 0)
 
     df_balance = df_balance.copy()
     df_balance["日付"] = pd.to_datetime(df_balance["日付"])
@@ -252,14 +252,10 @@ def calculate_monthly_summary(
     )
 
     nisa_amount, nisa_mode = calculate_nisa_amount(
-        df_params,
-        today,
-        available_cash,
-        current_asset
+        df_params, today, available_cash, current_asset
     )
 
     bank_save = max(available_cash - nisa_amount, 0)
-    free_cash = max(available_cash - nisa_amount - bank_save, 0)
 
     return {
         "monthly_income": monthly_income,
@@ -269,7 +265,7 @@ def calculate_monthly_summary(
         "variable_cost": variable_cost,
         "bank_save": bank_save,
         "nisa_save": nisa_amount,
-        "free_cash": free_cash,
+        "free_cash": max(available_cash - bank_save - nisa_amount, 0),
         "nisa_mode": nisa_mode,
         "current_asset": current_asset
     }
@@ -303,33 +299,37 @@ def main():
 
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
-        f"(固定 {int(summary['base_income']):,} / "
-        f"臨時 {int(summary['variable_income']):,})"
+        f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
     )
-
     st.caption(
-        f"固定費：{int(summary['fix_cost']):,} 円 / "
-        f"変動費：{int(summary['variable_cost']):,} 円"
+        f"固定費：{int(summary['fix_cost']):,} 円 / 変動費：{int(summary['variable_cost']):,} 円"
     )
-
     st.caption(
         f"※ 現在資産：{int(summary['current_asset']):,} 円"
     )
 
+    # 赤字アラート
+    deficit = analyze_deficit(
+        summary["monthly_income"],
+        summary["fix_cost"],
+        summary["variable_cost"]
+    )
+
+    if deficit:
+        st.warning(
+            f"⚠️ 今月は {int(deficit['amount']):,} 円の赤字です（主因：{deficit['cause']}）"
+        )
+
     # 振り返り
     st.subheader("🧠 今月の振り返り（満足度が低めだった支出）")
 
-    low_sat_df = analyze_low_satisfaction_expenses(df_forms, today)
+    low_df = analyze_low_satisfaction_expenses(df_forms, today)
 
-    if low_sat_df.empty:
+    if low_df.empty:
         st.success("🎉 今月は満足度の低い支出は特にありませんでした！")
     else:
-        st.caption(
-            "※ 満足度 1〜2 の支出を集計しています。"
-            "次に余裕がない月の参考にしてください。"
-        )
         st.dataframe(
-            low_sat_df.style.format({
+            low_df.style.format({
                 "合計金額": "{:,.0f} 円",
                 "平均満足度": "{:.1f}"
             }),
