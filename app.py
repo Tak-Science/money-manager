@@ -11,17 +11,17 @@ def main():
 
     with col2:
         st.metric(
-            "📈 NISA積立",
-            f"{summary['nisa_save']:,} 円",
-            delta=f"{summary['diff_from_past']:,} 円（前年差）"
+            f"📈 NISA積立（モード {summary['nisa_mode']}）",
+            f"{summary['nisa_save']:,} 円"
         )
 
     with col3:
         st.metric("🎉 自由に使えるお金", f"{summary['free_money']:,} 円")
 
-    st.caption(
-        f"※ 1億円ペースとの差：{summary['diff_from_ideal']:,} 円"
-    )
+    if summary["ideal_nisa"] > 0:
+        st.caption(
+            f"※ 1億円ペースの理想NISA積立：{summary['ideal_nisa']:,} 円 / 月"
+        )
 
 #imports & ページ設定
 import streamlit as st
@@ -120,43 +120,92 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
         "fix_cost": fix_cost,
         "variable_cost": variable_cost,
     }
+    
 def calculate_monthly_summary_dummy():
-    # --- ダミー値 ---
+    # --- ダミー収支 ---
     monthly_income = 300_000
     fix_cost = 150_000
     variable_cost = 60_000
 
-    nisa_target = 33_000
-    bank_target = 20_000
-
-    # --- 計算 ---
     surplus = monthly_income - fix_cost - variable_cost
     surplus = max(surplus, 0)
 
-    nisa_save = min(nisa_target, surplus)
+    # --- Parameters（ダミー） ---
+    nisa_mode = "C"
+    nisa_min = 10_000
+    nisa_max = 100_000
+    ideal_nisa = 50_000  # B用（仮）
+
+    # --- NISA積立 ---
+    nisa_save, ideal_nisa_save = calculate_nisa_save(
+        nisa_mode,
+        surplus,
+        nisa_min,
+        nisa_max,
+        ideal_nisa
+    )
+
     surplus -= nisa_save
 
-    bank_save = min(bank_target, surplus)
+    # --- 銀行積立 ---
+    bank_save = min(20_000, surplus)
     surplus -= bank_save
 
     free_money = surplus
 
-    # --- 差分（ダミー） ---
-    diff_from_past = 5_000
-    diff_from_ideal = -30_000
-
     return {
-        "bank_save": bank_save,
         "nisa_save": nisa_save,
+        "ideal_nisa": ideal_nisa_save,
+        "bank_save": bank_save,
         "free_money": free_money,
-        "diff_from_past": diff_from_past,
-        "diff_from_ideal": diff_from_ideal
+        "nisa_mode": nisa_mode
     }
+
+
+#NISAの積立額を決める関数
+def calculate_nisa_save(
+    mode,
+    surplus,
+    min_save,
+    max_save,
+    ideal_save=None
+):
+    """
+    mode: 'A', 'B', 'C'
+    surplus: 今月の余剰資金
+    min_save: NISA最低積立額
+    max_save: NISA最大積立額
+    ideal_save: 1億円逆算の理想積立額（B用）
+    """
+
+    if surplus <= 0:
+        return 0, 0  # 実際, 理想
+
+    # --- A：毎月固定 ---
+    if mode == "A":
+        actual = min(min_save, surplus)
+        return actual, actual
+
+    # --- C：余剰連動 ---
+    if mode == "C":
+        actual = min(max(min_save, surplus), max_save)
+        return actual, actual
+
+    # --- B：1億円逆算（表示用） ---
+    if mode == "B":
+        ideal = ideal_save if ideal_save else 0
+        actual = min(max(min_save, surplus), max_save)
+        return actual, ideal
+
+    # フォールバック
+    actual = min(min_save, surplus)
+    return actual, actual
 
 
 
 if __name__ == "__main__":
     main()
+
 
 
 
