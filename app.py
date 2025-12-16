@@ -588,7 +588,7 @@ def main():
     nisa_mode = summary["nisa_mode"]
 
 # 生活防衛費に基づく NISA 調整（ブレーキ）
-safe_cash = get_latest_bank_balance(df_balance)
+safe_cash = get_latest_bank_balance(df_balance_log)
 adjusted_nisa, nisa_reason = adjust_nisa_by_emergency_status(
     nisa_amount=nisa_save,
     safe_cash=safe_cash,
@@ -816,6 +816,7 @@ if deficit is not None:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
