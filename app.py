@@ -276,7 +276,74 @@ def analyze_memo_by_category(
         result[category][memo]["amount"] += row["金額"]
 
     return result
+def analyze_category_trend_3m(df_forms, today):
+    if df_forms.empty:
+        return []
 
+    df = df_forms.copy()
+    df["日付"] = pd.to_datetime(df["日付"])
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
+
+    # 変動費の費目だけ
+    expense_categories = [
+        "食費（外食・交際）",
+        "食費（日常）",
+        "趣味・娯楽",
+        "研究・書籍",
+        "日用品",
+        "交通費",
+        "その他"
+    ]
+
+    df = df[df["費目"].isin(expense_categories)]
+
+    # 月キー
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+    current_month = today.strftime("%Y-%m")
+
+    # 直近4か月を使う（当月＋過去3）
+    months = pd.period_range(
+        end=pd.Period(current_month, freq="M"),
+        periods=4,
+        freq="M"
+    ).astype(str)
+
+    df = df[df["month"].isin(months)]
+
+    if df.empty:
+        return []
+
+    # 月×カテゴリ集計
+    pivot = (
+        df.groupby(["month", "費目"], as_index=False)["金額"]
+        .sum()
+        .pivot(index="費目", columns="month", values="金額")
+        .fillna(0)
+    )
+
+    if current_month not in pivot.columns:
+        return []
+
+    # 過去3か月平均
+    past_months = [m for m in months if m != current_month]
+    pivot["past_3m_avg"] = pivot[past_months].mean(axis=1)
+
+    # 差分（今月 − 過去平均）
+    pivot["diff"] = pivot[current_month] - pivot["past_3m_avg"]
+
+    # 増えているものだけ
+    increased = pivot[pivot["diff"] > 0].sort_values("diff", ascending=False)
+
+    result = []
+    for category, row in increased.iterrows():
+        result.append({
+            "category": category,
+            "current": row[current_month],
+            "past_avg": row["past_3m_avg"],
+            "diff": row["diff"]
+        })
+
+    return result
 # ==================================================
 # 今月サマリー
 # ==================================================
@@ -414,11 +481,25 @@ def main():
                     f"- {memo}：{stats['count']} 回 / "
                     f"合計 {int(stats['amount']):,} 円"
                 )
+    # ==========================================
+    # 変動費の増加トレンド（直近3か月比較）
+    # ==========================================
+    st.subheader("📈 最近増えている費目（直近月 vs 過去3か月平均）")
 
+    trend = analyze_category_trend_3m(df_forms, today)
 
+    if not trend:
+        st.info("最近増えている費目は特にありませんでした")
+    else:
+        for item in trend:
+            st.markdown(
+                f"- **{item['category']}**："
+                f"今月 {int(item['current']):,} 円 / "
+                f"過去平均 {int(item['past_avg']):,} 円 "
+                f"（**+{int(item['diff']):,} 円**）"
+            )
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
-
