@@ -16,7 +16,7 @@ st.set_page_config(
 # Google Sheets 設定
 # ==================================================
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SPREADSHEET_URL = "ここにあなたのGoogleスプレッドシートURL"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=1717867857#gid=1717867857"
 
 # ==================================================
 # Google Sheets 接続
@@ -249,3 +249,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
