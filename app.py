@@ -10,7 +10,7 @@ from dateutil.relativedelta import relativedelta
 # --- 設定 ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 # URLを貼り付けてください
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1Ih1twG9XDIo5M9o9Qp_qVn5Z6v-p-U3i2T-u8-v8-mE/edit"
+SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=1320802603#gid=1320802603"
 
 st.set_page_config(page_title="Financial Freedom Dashboard", layout="wide")
 
@@ -205,3 +205,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
