@@ -591,7 +591,7 @@ col3.metric("🎉 自由に使えるお金", f"{int(free_cash):,} 円")
 
 st.caption(f"生活防衛費ステータスによるNISA調整：{nisa_reason}")
 
-    st.caption(
+st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
         f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
     )
@@ -798,6 +798,7 @@ st.caption(f"生活防衛費ステータスによるNISA調整：{nisa_reason}")
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
