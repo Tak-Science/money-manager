@@ -276,6 +276,7 @@ def analyze_memo_by_category(
         result[category][memo]["amount"] += row["金額"]
 
     return result
+    
 def analyze_category_trend_3m(df_forms, today):
     if df_forms.empty:
         return []
@@ -284,7 +285,6 @@ def analyze_category_trend_3m(df_forms, today):
     df["日付"] = pd.to_datetime(df["日付"])
     df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
 
-    # 変動費の費目だけ
     expense_categories = [
         "食費（外食・交際）",
         "食費（日常）",
@@ -297,11 +297,10 @@ def analyze_category_trend_3m(df_forms, today):
 
     df = df[df["費目"].isin(expense_categories)]
 
-    # 月キー
     df["month"] = df["日付"].dt.to_period("M").astype(str)
     current_month = today.strftime("%Y-%m")
 
-    # 直近4か月を使う（当月＋過去3）
+    # 直近4か月（当月＋過去3）
     months = pd.period_range(
         end=pd.Period(current_month, freq="M"),
         periods=4,
@@ -313,7 +312,6 @@ def analyze_category_trend_3m(df_forms, today):
     if df.empty:
         return []
 
-    # 月×カテゴリ集計
     pivot = (
         df.groupby(["month", "費目"], as_index=False)["金額"]
         .sum()
@@ -324,14 +322,15 @@ def analyze_category_trend_3m(df_forms, today):
     if current_month not in pivot.columns:
         return []
 
-    # 過去3か月平均
-    past_months = [m for m in months if m != current_month]
-    pivot["past_3m_avg"] = pivot[past_months].mean(axis=1)
+    # ★ 実際に存在する過去月だけを使う
+    past_months = [m for m in pivot.columns if m != current_month]
 
-    # 差分（今月 − 過去平均）
+    if not past_months:
+        return []
+
+    pivot["past_3m_avg"] = pivot[past_months].mean(axis=1)
     pivot["diff"] = pivot[current_month] - pivot["past_3m_avg"]
 
-    # 増えているものだけ
     increased = pivot[pivot["diff"] > 0].sort_values("diff", ascending=False)
 
     result = []
@@ -503,3 +502,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
