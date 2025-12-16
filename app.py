@@ -8,7 +8,7 @@ st.set_page_config(
 )
 
 #Googleスプレッドシートのデータを読み取る
-ef load_data():
+def load_data():
     # 仮データ（あとでGoogle Sheetsに置き換える）
     df_params = pd.DataFrame({
         "項目": ["NISA積立モード"],
@@ -215,3 +215,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
