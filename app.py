@@ -1,24 +1,3 @@
-#mainの設定（Streamlit側のUI設定）
-def main():
-    st.title("💰 今月サマリー")
-
-    # ① データ取得（ここが必須）
-    df_params, df_fix, df_balance, df_forms, df_goals = load_data()
-
-    # ② 今日の日付
-    today = datetime.today()
-
-    # ③ サマリー計算
-    summary = calculate_monthly_summary(df_params, today)
-
-    if summary is None:
-        st.warning("Parameters を確認してください")
-        return
-
-    # ④ 表示
-    st.metric("📈 NISA積立", f"{summary['nisa_amount']:,} 円")
-
-
 #imports & ページ設定
 import streamlit as st
 import pandas as pd
@@ -27,6 +6,21 @@ st.set_page_config(
     page_title="Financial Freedom Dashboard",
     layout="wide"
 )
+
+#Googleスプレッドシートのデータを読み取る
+ef load_data():
+    # 仮データ（あとでGoogle Sheetsに置き換える）
+    df_params = pd.DataFrame({
+        "項目": ["NISA積立モード"],
+        "値": ["C"]
+    })
+    df_fix = pd.DataFrame()
+    df_balance = pd.DataFrame()
+    df_forms = pd.DataFrame()
+    df_goals = pd.DataFrame()
+
+    return df_params, df_fix, df_balance, df_forms, df_goals
+
 #前処理
 def preprocess_data(df_params, df_fix, df_balance, df_forms):
     for df, col in [
@@ -199,18 +193,25 @@ def calculate_nisa_save(
     actual = min(min_save, surplus)
     return actual, actual
 
+#mainの設定（Streamlit側のUI設定）
+def main():
+    st.title("💰 今月サマリー")
+
+    # ① データ取得（ここが必須）
+    df_params, df_fix, df_balance, df_forms, df_goals = load_data()
+
+    # ② 今日の日付
+    today = datetime.today()
+
+    # ③ サマリー計算
+    summary = calculate_monthly_summary(df_params, today)
+
+    if summary is None:
+        st.warning("Parameters を確認してください")
+        return
+
+    # ④ 表示
+    st.metric("📈 NISA積立", f"{summary['nisa_amount']:,} 円")
+
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
-
