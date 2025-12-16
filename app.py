@@ -16,7 +16,7 @@ st.set_page_config(
 # Google Sheets 設定
 # ==================================================
 SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
-SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=2102244245#gid=2102244245"
+SPREADSHEET_URL = "ここにあなたのGoogleスプレッドシートURL"
 
 # ==================================================
 # Google Sheets 接続
@@ -125,7 +125,7 @@ def calculate_monthly_variable_cost(df_forms, today):
     ]["金額"].sum()
 
 # ==================================================
-# 変動収入（臨時収入・バイト代）
+# 変動収入（臨時収入）
 # ==================================================
 def calculate_monthly_variable_income(df_forms, today):
     if df_forms.empty:
@@ -174,7 +174,7 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     return nisa, mode
 
 # ==================================================
-# 赤字分析（詳細版）
+# 赤字分析（想定変動費付き）
 # ==================================================
 def analyze_deficit(monthly_income, fix_cost, variable_cost):
     deficit = monthly_income - fix_cost - variable_cost
@@ -183,9 +183,9 @@ def analyze_deficit(monthly_income, fix_cost, variable_cost):
 
     deficit_amount = abs(deficit)
 
+    variable_expected = monthly_income * 0.3
+    variable_over = variable_cost - variable_expected
     fix_over = fix_cost - monthly_income
-    variable_threshold = monthly_income * 0.3
-    variable_over = variable_cost - variable_threshold
 
     if fix_over > 0 and variable_over <= 0:
         cause = "固定費"
@@ -199,7 +199,7 @@ def analyze_deficit(monthly_income, fix_cost, variable_cost):
         "cause": cause,
         "fix_over": fix_over,
         "variable_over": variable_over,
-        "variable_threshold": variable_threshold
+        "variable_expected": variable_expected
     }
 
 # ==================================================
@@ -318,7 +318,7 @@ def main():
         f"※ 現在資産：{int(summary['current_asset']):,} 円"
     )
 
-    # 赤字アラート（詳細表示）
+    # 赤字アラート
     deficit = analyze_deficit(
         summary["monthly_income"],
         summary["fix_cost"],
@@ -336,13 +336,19 @@ def main():
                 f"- 固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
             )
             st.markdown(
-                f"- 今月の変動費：{int(summary['variable_cost']):,} 円"
+                f"- 変動費は想定範囲内です  \n"
+                f"  （想定：{int(deficit['variable_expected']):,} 円 / "
+                f"実際：{int(summary['variable_cost']):,} 円）"
             )
+
         elif deficit["cause"] == "変動費":
             st.markdown(
-                f"- 今月の変動費が多めです（目安より +{int(deficit['variable_over']):,} 円）"
+                f"- 変動費が想定を超えています（+{int(deficit['variable_over']):,} 円）  \n"
+                f"  （想定：{int(deficit['variable_expected']):,} 円 / "
+                f"実際：{int(summary['variable_cost']):,} 円）"
             )
             st.markdown("- 固定費は想定内です")
+
         else:
             if deficit["fix_over"] > 0:
                 st.markdown(
@@ -350,7 +356,9 @@ def main():
                 )
             if deficit["variable_over"] > 0:
                 st.markdown(
-                    f"- 変動費もやや多めです（+{int(deficit['variable_over']):,} 円）"
+                    f"- 変動費も想定を超えています（+{int(deficit['variable_over']):,} 円）  \n"
+                    f"  （想定：{int(deficit['variable_expected']):,} 円 / "
+                    f"実際：{int(summary['variable_cost']):,} 円）"
                 )
 
     # 振り返り
@@ -374,4 +382,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
