@@ -453,15 +453,29 @@ def estimate_emergency_fund(df_params, df_fix, df_forms, today):
 
     fund_median = base * n_months
     fund_p75 = p75 * n_months
+    min_months = 3
+    comfort_months = 9
+
+    fund_min = base * min_months
+    fund_rec = base * n_months
+    fund_comfort = p75 * comfort_months
 
     return {
         "months_factor": n_months,
         "method": method,
         "monthly_est_median": base,
         "monthly_est_p75": p75,
-        "fund_median": fund_median,
-        "fund_p75": fund_p75,
-        "series_total": total_s,   # 後でグラフ化にも使える
+
+        # 3ライン
+        "fund_min": fund_min,
+        "fund_rec": fund_rec,
+        "fund_comfort": fund_comfort,
+
+        # 既存
+        "fund_median": fund_rec,
+        "fund_p75": p75 * n_months,
+
+        "series_total": total_s,
         "series_fix": fix_s,
         "series_var": var_s
     }
@@ -699,11 +713,60 @@ def main():
             df_view.style.format("{:,.0f}"),
             use_container_width=True
         )
+    # ==========================================
+    # 生活防衛費ステータス（3段階 + 帯表示）
+    # ==========================================
+    st.subheader("🛡️ 生活防衛費ステータス")
+
+    safe_cash = get_latest_bank_balance(df_balance)
+
+    if safe_cash is None:
+        st.info("銀行残高が未入力のため、ステータスを表示できません。")
+    else:
+        f_min = ef["fund_min"]
+        f_rec = ef["fund_rec"]
+        f_com = ef["fund_comfort"]
+
+        # ステータス判定
+        if safe_cash < f_min:
+            status = "危険ゾーン"
+            color = "❌"
+        elif safe_cash < f_rec:
+            status = "最低限ゾーン"
+            color = "⚠️"
+        elif safe_cash < f_com:
+            status = "推奨ゾーン"
+            color = "✅"
+        else:
+            status = "安心ゾーン"
+            color = "🟢"
+
+        st.markdown(
+            f"""
+**最低**：{int(f_min):,} 円  
+**推奨**：{int(f_rec):,} 円  
+**安心**：{int(f_com):,} 円  
+
+**現在の安全資金**：{int(safe_cash):,} 円  
+**ステータス**：{color} **{status}**
+"""
+        )
+
+        # 帯（プログレスバー）
+        max_scale = max(f_com, safe_cash)
+        progress = min(safe_cash / max_scale, 1.0)
+
+        st.progress(progress)
+
+        st.caption(
+            "帯表示：最低 → 推奨 → 安心 の順に安全度が高まります"
+        )
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
