@@ -136,9 +136,10 @@ def calculate_monthly_summary_dummy():
     surplus = max(surplus, 0)
 
     # --- Parameters（ダミー） ---
-    nisa_mode = "C"
-    nisa_min = 10_000
-    nisa_max = 100_000
+    nisa_mode = get_latest_parameter(df_params, "NISA積立モード", today)
+    nisa_min = int(get_latest_parameter(df_params, "NISA最低積立額", today))
+    nisa_max = int(get_latest_parameter(df_params, "NISA最大積立額", today))
+    target_asset = int(get_latest_parameter(df_params, "目標資産額", today))
     ideal_nisa = 50_000  # B用（仮）
 
     # --- NISA積立 ---
@@ -216,10 +217,9 @@ def calculate_nisa_save(
     actual = min(min_save, surplus)
     return actual, actual
 
-
-
 if __name__ == "__main__":
     main()
+
 
 
 
