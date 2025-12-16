@@ -63,10 +63,10 @@ def load_data():
 # Parameters 取得（履歴対応）
 # ==================================================
 def get_latest_parameter(df, item, target_date):
-    df = df.copy()
     if df.empty:
         return None
 
+    df = df.copy()
     if "適用開始日" not in df.columns:
         return None
 
@@ -133,19 +133,23 @@ def calculate_nisa_amount(
     # 現在年齢（Profile未導入のため仮）
     current_age = 20
 
+    # --- モード別計算 ---
     if mode == "A":
-        return min_nisa, "A"
+        nisa = min_nisa
 
-    if mode == "B":
+    elif mode == "B":
         years_left = max(retire_age - current_age, 1)
         months_left = years_left * 12
         ideal = (target_asset - current_asset) / months_left
         nisa = max(min(ideal, max_nisa), min_nisa)
-        return nisa, "B"
 
-    # モードC（余剰ベース）
-    nisa = max(min(available_cash, max_nisa), min_nisa)
-    return nisa, "C"
+    else:  # モードC（余剰ベース）
+        nisa = max(min(available_cash, max_nisa), min_nisa)
+
+    # ★ 最重要：余剰資金を超えない
+    nisa = max(min(nisa, available_cash), 0)
+
+    return nisa, mode
 
 # ==================================================
 # 今月サマリー
@@ -249,4 +253,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
