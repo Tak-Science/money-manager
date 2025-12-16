@@ -1,4 +1,7 @@
 #今月のサマリ
+def main():
+    st.title("💰 今月サマリー")
+
 #imports & ページ設定
 import streamlit as st
 import pandas as pd
@@ -100,3 +103,4 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
 
 if __name__ == "__main__":
     main()
+
