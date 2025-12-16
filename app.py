@@ -2,7 +2,7 @@
 def main():
     st.title("💰 今月サマリー")
 
-    summary = calculate_monthly_summary_dummy()
+    summary = calculate_monthly_summary(df_params, today)
 
     col1, col2, col3 = st.columns(3)
 
@@ -210,6 +210,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
