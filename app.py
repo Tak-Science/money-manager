@@ -82,6 +82,24 @@ def get_latest_parameter(df, item, target_date):
 # ==================================================
 # 固定費（キャッシュアウト）
 # ==================================================
+def calculate_monthly_variable_income(df_forms, today):
+    if df_forms.empty:
+        return 0
+
+    df = df_forms.copy()
+    df["日付"] = pd.to_datetime(df["日付"])
+    df["金額"] = df["金額"].astype(float)
+
+    current_month = today.strftime("%Y-%m")
+    df["month"] = df["日付"].dt.strftime("%Y-%m")
+
+    income_categories = ["給与・バイト代", "臨時収入"]
+
+    return df[
+        (df["month"] == current_month) &
+        (df["費目"].isin(income_categories))
+    ]["金額"].sum()
+
 def calculate_monthly_fix_cost(df_fix, today):
     if df_fix.empty:
         return 0
@@ -101,7 +119,7 @@ def calculate_monthly_fix_cost(df_fix, today):
 # ==================================================
 # 変動費（Forms_Log）
 # ==================================================
-def calculate_monthly_variable_cost(df_forms, today):
+def monthly_monthly_variable_cost(df_forms, today):
     if df_forms.empty:
         return 0
 
@@ -117,7 +135,7 @@ def calculate_monthly_variable_cost(df_forms, today):
 # ==================================================
 # NISA 積立計算（A / B / C）
 # ==================================================
-def calculate_nisa_amount(
+def monthly_income_nisa_amount(
     df_params,
     today,
     available_cash,
@@ -154,19 +172,24 @@ def calculate_nisa_amount(
 # ==================================================
 # 今月サマリー
 # ==================================================
-def calculate_monthly_summary(
+def monthly_income_monthly_summary(
     df_params,
     df_fix,
     df_forms,
     df_balance,
     today
 ):
-    monthly_income = float(
-        get_latest_parameter(df_params, "月収", today)
-    )
+    base_income = float(
+    get_latest_parameter(df_params, "月収", today)
+)
 
-    fix_cost = calculate_monthly_fix_cost(df_fix, today)
-    variable_cost = calculate_monthly_variable_cost(df_forms, today)
+    variable_income = calculate_monthly_variable_income(df_forms, today)
+
+    monthly_income = base_income + variable_income
+
+
+    fix_cost = monthly_income_monthly_fix_cost(df_fix, today)
+    variable_cost = monthly_income_monthly_variable_cost(df_forms, today)
 
     available_cash = max(
         monthly_income - fix_cost - variable_cost, 0
@@ -184,7 +207,7 @@ def calculate_monthly_summary(
         .sum()
     )
 
-    nisa_amount, nisa_mode = calculate_nisa_amount(
+    nisa_amount, nisa_mode = monthly_income_nisa_amount(
         df_params,
         today,
         available_cash,
@@ -214,7 +237,7 @@ def main():
     df_params, df_fix, df_forms, df_balance = load_data()
     today = datetime.today()
 
-    summary = calculate_monthly_summary(
+    summary = monthly_income_monthly_summary(
         df_params, df_fix, df_forms, df_balance, today
     )
 
@@ -253,3 +276,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
