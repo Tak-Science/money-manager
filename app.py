@@ -483,7 +483,7 @@ def get_latest_bank_balance(df_balance):
     return float(df.iloc[-1]["銀行残高"])
 # ==================================================
 #今月サマリー今月サマリー
-＃==================================================
+#===================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     base_income = float(get_latest_parameter(df_params, "月収", today))
     variable_income = calculate_monthly_variable_income(df_forms, today)
@@ -704,6 +704,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
