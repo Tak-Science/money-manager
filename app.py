@@ -607,19 +607,23 @@ deficit = analyze_deficit(
         summary["variable_cost"]
     )
 
-if deficit:
-        st.warning(f"⚠️ 今月は {int(deficit['deficit_amount']):,} 円の赤字です")
-        st.markdown("**主な要因：**")
+if deficit is not None:
+    st.warning(f"⚠️ 今月は {int(deficit['total_deficit']):,} 円の赤字です")
+
+    st.markdown("**主な要因：**")
 
     if deficit["fix_over"] > 0:
-        st.markdown(
-                f"- 固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
-            )
+        st.write(
+            f"固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
+        )
 
-    st.markdown(
-            f"- 変動費は想定範囲内です  \n"
-            f"（想定：{int(deficit['variable_expected']):,} 円 / "
-            f"実際：{int(summary['variable_cost']):,} 円）"
+    if deficit["var_over"] > 0:
+        st.write(
+            f"変動費が想定を {int(deficit['var_over']):,} 円 上回っています"
+        )
+    else:
+        st.write(
+            f"変動費は想定範囲内です（想定：{int(deficit['var_expected']):,} 円 / 実際：{int(deficit['var_actual']):,} 円）"
         )
 
     st.subheader("🧠 今月の振り返り（メモ分析）")
@@ -798,6 +802,7 @@ if deficit:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
