@@ -595,13 +595,13 @@ st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
         f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
     )
-    st.caption(
+st.caption(
         f"固定費：{int(summary['fix_cost']):,} 円 / "
         f"変動費：{int(summary['variable_cost']):,} 円"
     )
-    st.caption(f"※ 現在資産：{int(summary['current_asset']):,} 円")
+st.caption(f"※ 現在資産：{int(summary['current_asset']):,} 円")
 
-    deficit = analyze_deficit(
+deficit = analyze_deficit(
         summary["monthly_income"],
         summary["fix_cost"],
         summary["variable_cost"]
@@ -798,6 +798,7 @@ st.caption(
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
