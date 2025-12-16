@@ -523,8 +523,81 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_asset": float(current_asset),
         "available_cash": float(available_cash),
     }
+# ==================================================
+# 資産推移グラフ関数
+# ==================================================
+import plotly.graph_objects as go
 
+def plot_asset_trend(df_balance, ef):
+    if df_balance.empty:
+        st.info("Balance_Log にデータがないため、資産推移を表示できません。")
+        return
 
+    required_cols = {"日付", "銀行残高", "NISA評価額"}
+    if not required_cols.issubset(set(df_balance.columns)):
+        st.info("Balance_Log の列が不足しています。")
+        return
+
+    df = df_balance.copy()
+    df = df.dropna(subset=["日付"])
+    df = df.sort_values("日付")
+
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce").fillna(0)
+    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce").fillna(0)
+    df["合計資産"] = df["銀行残高"] + df["NISA評価額"]
+
+    fig = go.Figure()
+
+    # 銀行残高
+    fig.add_trace(go.Scatter(
+        x=df["日付"],
+        y=df["銀行残高"],
+        mode="lines+markers",
+        name="🏦 銀行残高"
+    ))
+
+    # NISA
+    fig.add_trace(go.Scatter(
+        x=df["日付"],
+        y=df["NISA評価額"],
+        mode="lines+markers",
+        name="📈 NISA評価額"
+    ))
+
+    # 合計資産
+    fig.add_trace(go.Scatter(
+        x=df["日付"],
+        y=df["合計資産"],
+        mode="lines+markers",
+        name="💰 合計資産",
+        line=dict(width=4)
+    ))
+
+    # 生活防衛費ライン（推奨）
+    fig.add_hline(
+        y=ef["fund_rec"],
+        line_dash="dash",
+        annotation_text="🛡️ 生活防衛費（推奨）",
+        annotation_position="top left"
+    )
+
+    # 生活防衛費ライン（最低）
+    fig.add_hline(
+        y=ef["fund_min"],
+        line_dash="dot",
+        annotation_text="⚠️ 生活防衛費（最低）",
+        annotation_position="bottom left"
+    )
+
+    fig.update_layout(
+        title="📊 資産推移（銀行・NISA・合計）",
+        xaxis_title="日付",
+        yaxis_title="金額（円）",
+        hovermode="x unified",
+        height=500
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
 # ==================================================
 # UI
 # ==================================================
@@ -728,12 +801,13 @@ def main():
         progress = min(float(safe_cash) / max_scale, 1.0) if max_scale > 0 else 0.0
         st.progress(progress)
         st.caption("帯表示：最低 → 推奨 → 安心 の順に安全度が高まります")
-
-
+    # ==========================================
+    # 資産推移グラフ
+    # ==========================================
+    st.subheader("📊 資産推移")
+    plot_asset_trend(df_balance, ef)
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
