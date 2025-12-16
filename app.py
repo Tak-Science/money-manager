@@ -466,8 +466,24 @@ def estimate_emergency_fund(df_params, df_fix, df_forms, today):
         "series_var": var_s
     }
 # ==================================================
-# 今月サマリー
+# 最新の銀行口座を取得する関数
+# ==================================================    
+def get_latest_bank_balance(df_balance):
+    if df_balance.empty:
+        return None
+
+    df = df_balance.copy()
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
+
+    df = df.dropna(subset=["日付", "銀行残高"]).sort_values("日付")
+    if df.empty:
+        return None
+
+    return float(df.iloc[-1]["銀行残高"])
 # ==================================================
+#今月サマリー今月サマリー
+＃==================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     base_income = float(get_latest_parameter(df_params, "月収", today))
     variable_income = calculate_monthly_variable_income(df_forms, today)
@@ -634,6 +650,42 @@ def main():
     st.caption(f"算出方法：{ef['method']}")
 
     st.markdown("**推奨 生活防衛費**")
+    # ==========================================
+    # 生活防衛費：到達度・不足額（v1）
+    # ==========================================
+    st.subheader("✅ 生活防衛費の達成状況")
+
+    safe_cash = get_latest_bank_balance(df_balance)
+
+    if safe_cash is None:
+        st.info("Balance_Log に銀行残高が無いため、達成状況を計算できませんでした。")
+    else:
+        need_median = float(ef["fund_median"])
+        need_p75 = float(ef["fund_p75"])
+
+        # 中央値ベース
+        ratio_median = 0 if need_median <= 0 else min(safe_cash / need_median, 1.0)
+        gap_median = need_median - safe_cash
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("現在の安全資金（銀行残高）", f"{int(safe_cash):,} 円")
+        c2.metric("必要額（中央値ベース）", f"{int(need_median):,} 円")
+        c3.metric("達成率（中央値ベース）", f"{int(ratio_median*100)} %")
+
+        st.progress(ratio_median)
+
+        if gap_median > 0:
+            st.warning(f"中央値ベースで **あと {int(gap_median):,} 円** 不足しています。")
+        else:
+            st.success(f"中央値ベースは達成済みです（**+{int(abs(gap_median)):,} 円** 余裕）。")
+
+        # 参考：P75ベースも一行で
+        gap_p75 = need_p75 - safe_cash
+        if need_p75 > 0:
+            if gap_p75 > 0:
+                st.caption(f"参考（保守的/P75）：あと {int(gap_p75):,} 円")
+            else:
+                st.caption(f"参考（保守的/P75）：達成済み（+{int(abs(gap_p75)):,} 円）")
     st.markdown(f"- 中央値ベース：**{int(ef['fund_median']):,} 円**")
     st.markdown(f"- 保守的（P75） ：**{int(ef['fund_p75']):,} 円**")
 
@@ -652,5 +704,6 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
