@@ -174,23 +174,32 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     return nisa, mode
 
 # ==================================================
-# 赤字分析
+# 赤字分析（詳細版）
 # ==================================================
 def analyze_deficit(monthly_income, fix_cost, variable_cost):
     deficit = monthly_income - fix_cost - variable_cost
     if deficit >= 0:
         return None
 
-    if fix_cost > monthly_income:
+    deficit_amount = abs(deficit)
+
+    fix_over = fix_cost - monthly_income
+    variable_threshold = monthly_income * 0.3
+    variable_over = variable_cost - variable_threshold
+
+    if fix_over > 0 and variable_over <= 0:
         cause = "固定費"
-    elif variable_cost > monthly_income * 0.3:
+    elif variable_over > 0 and fix_over <= 0:
         cause = "変動費"
     else:
         cause = "複合要因"
 
     return {
-        "amount": abs(deficit),
-        "cause": cause
+        "deficit_amount": deficit_amount,
+        "cause": cause,
+        "fix_over": fix_over,
+        "variable_over": variable_over,
+        "variable_threshold": variable_threshold
     }
 
 # ==================================================
@@ -302,13 +311,14 @@ def main():
         f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
     )
     st.caption(
-        f"固定費：{int(summary['fix_cost']):,} 円 / 変動費：{int(summary['variable_cost']):,} 円"
+        f"固定費：{int(summary['fix_cost']):,} 円 / "
+        f"変動費：{int(summary['variable_cost']):,} 円"
     )
     st.caption(
         f"※ 現在資産：{int(summary['current_asset']):,} 円"
     )
 
-    # 赤字アラート
+    # 赤字アラート（詳細表示）
     deficit = analyze_deficit(
         summary["monthly_income"],
         summary["fix_cost"],
@@ -317,8 +327,31 @@ def main():
 
     if deficit:
         st.warning(
-            f"⚠️ 今月は {int(deficit['amount']):,} 円の赤字です（主因：{deficit['cause']}）"
+            f"⚠️ 今月は {int(deficit['deficit_amount']):,} 円の赤字です"
         )
+        st.markdown("**主な要因：**")
+
+        if deficit["cause"] == "固定費":
+            st.markdown(
+                f"- 固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
+            )
+            st.markdown(
+                f"- 今月の変動費：{int(summary['variable_cost']):,} 円"
+            )
+        elif deficit["cause"] == "変動費":
+            st.markdown(
+                f"- 今月の変動費が多めです（目安より +{int(deficit['variable_over']):,} 円）"
+            )
+            st.markdown("- 固定費は想定内です")
+        else:
+            if deficit["fix_over"] > 0:
+                st.markdown(
+                    f"- 固定費がやや高めです（+{int(deficit['fix_over']):,} 円）"
+                )
+            if deficit["variable_over"] > 0:
+                st.markdown(
+                    f"- 変動費もやや多めです（+{int(deficit['variable_over']):,} 円）"
+                )
 
     # 振り返り
     st.subheader("🧠 今月の振り返り（満足度が低めだった支出）")
