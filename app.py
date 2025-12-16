@@ -2,31 +2,22 @@
 def main():
     st.title("💰 今月サマリー")
 
+    # ① データ取得（ここが必須）
+    df_params, df_fix, df_balance, df_forms, df_goals = load_data()
+
+    # ② 今日の日付
+    today = datetime.today()
+
+    # ③ サマリー計算
     summary = calculate_monthly_summary(df_params, today)
 
-    col1, col2, col3 = st.columns(3)
+    if summary is None:
+        st.warning("Parameters を確認してください")
+        return
 
-    with col1:
-        st.metric("🏦 銀行への積立", f"{summary['bank_save']:,} 円")
+    # ④ 表示
+    st.metric("📈 NISA積立", f"{summary['nisa_amount']:,} 円")
 
-    with col2:
-        st.metric(
-            f"📈 NISA積立（モード {summary['nisa_mode']}）",
-            f"{summary['nisa_save']:,} 円"
-        )
-
-    with col3:
-        st.metric("🎉 自由に使えるお金", f"{summary['free_money']:,} 円")
-
-    if summary["ideal_nisa"] > 0:
-        st.caption(
-            f"※ 1億円ペースの理想NISA積立：{summary['ideal_nisa']:,} 円 / 月"
-        )
-        st.caption(
-    f"※ 現在資産：{summary['current_asset']:,} 円 / "
-    f"理想資産：{summary['ideal_asset_today']:,} 円 "
-    f"（差分 {summary['asset_gap']:,} 円）"
-)
 
 #imports & ページ設定
 import streamlit as st
@@ -210,6 +201,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
