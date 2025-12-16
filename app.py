@@ -344,6 +344,128 @@ def analyze_category_trend_3m(df_forms, today):
 
     return result
 # ==================================================
+# 月次シリーズを作る関数
+# ==================================================
+def build_month_list(today, months_back=12):
+    end = pd.Period(today.strftime("%Y-%m"), freq="M")
+    months = pd.period_range(end=end, periods=months_back, freq="M").astype(str)
+    return list(months)
+
+def monthly_variable_cost_series(df_forms, months):
+    if df_forms.empty:
+        return pd.Series(0, index=months, dtype=float)
+
+    df = df_forms.copy()
+    df["日付"] = pd.to_datetime(df["日付"])
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce").fillna(0)
+
+    expense_categories = [
+        "食費（外食・交際）",
+        "食費（日常）",
+        "趣味・娯楽",
+        "研究・書籍",
+        "日用品",
+        "交通費",
+        "その他"
+    ]
+
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+
+    s = (
+        df[df["費目"].isin(expense_categories)]
+        .groupby("month")["金額"]
+        .sum()
+        .reindex(months, fill_value=0)
+        .astype(float)
+    )
+    return s
+
+def monthly_fix_cost_series(df_fix, months):
+    # v1: 毎月はそのまま、毎年は/12で均等配分（開始〜終了の有効期間内だけ）
+    if df_fix.empty:
+        return pd.Series(0, index=months, dtype=float)
+
+    df = df_fix.copy()
+    df["開始日"] = pd.to_datetime(df["開始日"], errors="coerce")
+    df["終了日"] = pd.to_datetime(df["終了日"], errors="coerce")
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce").fillna(0)
+    df["サイクル"] = df["サイクル"].fillna("毎月")
+
+    out = pd.Series(0, index=months, dtype=float)
+
+    for m in months:
+        p = pd.Period(m, freq="M")
+        month_start = p.start_time
+        month_end = p.end_time
+
+        active = df[
+            (df["開始日"].notna()) &
+            (df["開始日"] <= month_end) &
+            ((df["終了日"].isna()) | (df["終了日"] >= month_start))
+        ].copy()
+
+        if active.empty:
+            continue
+
+        # サイクルによる平準化
+        active["monthly_amount"] = active.apply(
+            lambda r: r["金額"] if "毎月" in str(r["サイクル"]) else (r["金額"] / 12.0 if "毎年" in str(r["サイクル"]) else r["金額"]),
+            axis=1
+        )
+
+        out[m] = active["monthly_amount"].sum()
+
+    return out
+# ==================================================
+# 生活防衛費を推定する関数
+# ==================================================
+def estimate_emergency_fund(df_params, df_fix, df_forms, today):
+    # Parameters: 生活防衛費係数（月のN数）
+    n = get_latest_parameter(df_params, "生活防衛費係数（月のN数）", today)
+    try:
+        n_months = int(float(n))
+    except:
+        n_months = 6  # 取れないときのデフォルト
+
+    months = build_month_list(today, months_back=12)
+
+    fix_s = monthly_fix_cost_series(df_fix, months)
+    var_s = monthly_variable_cost_series(df_forms, months)
+
+    total_s = fix_s + var_s
+
+    # データが少ない場合に備える：0ばかりの月は含めすぎない
+    nonzero = total_s[total_s > 0]
+
+    if len(nonzero) == 0:
+        # まだデータが無ければ、今月値だけで暫定
+        current_fix = calculate_monthly_fix_cost(df_fix, today)
+        current_var = calculate_monthly_variable_cost(df_forms, today)
+        base = float(current_fix + current_var)
+        p75 = base
+        used_months = 1
+        method = "暫定（今月のみ）"
+    else:
+        base = float(nonzero.median())
+        p75 = float(nonzero.quantile(0.75))
+        used_months = int(len(nonzero))
+        method = f"過去{used_months}か月（中央値・P75）"
+
+    fund_median = base * n_months
+    fund_p75 = p75 * n_months
+
+    return {
+        "months_factor": n_months,
+        "method": method,
+        "monthly_est_median": base,
+        "monthly_est_p75": p75,
+        "fund_median": fund_median,
+        "fund_p75": fund_p75,
+        "series_total": total_s,   # 後でグラフ化にも使える
+        "series_fix": fix_s,
+        "series_var": var_s
+    }
+# ==================================================
 # 今月サマリー
 # ==================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
@@ -497,9 +619,38 @@ def main():
                 f"過去平均 {int(item['past_avg']):,} 円 "
                 f"（**+{int(item['diff']):,} 円**）"
             )
+    # ==========================================
+    # 生活防衛費（自動算出）
+    # ==========================================
+    st.subheader("🛡️ 生活防衛費（自動算出）")
+
+    ef = estimate_emergency_fund(df_params, df_fix, df_forms, today)
+
+    c1, c2, c3 = st.columns(3)
+    c1.metric("推定 1か月生活費（中央値）", f"{int(ef['monthly_est_median']):,} 円")
+    c2.metric("推定 1か月生活費（P75）", f"{int(ef['monthly_est_p75']):,} 円")
+    c3.metric(f"係数（{ef['months_factor']}か月分）", f"{ef['months_factor']} か月")
+
+    st.caption(f"算出方法：{ef['method']}")
+
+    st.markdown("**推奨 生活防衛費**")
+    st.markdown(f"- 中央値ベース：**{int(ef['fund_median']):,} 円**")
+    st.markdown(f"- 保守的（P75） ：**{int(ef['fund_p75']):,} 円**")
+
+    with st.expander("内訳（月次）を見る"):
+        df_view = pd.DataFrame({
+            "固定費": ef["series_fix"],
+            "変動費": ef["series_var"],
+            "合計": ef["series_total"]
+        })
+        st.dataframe(
+            df_view.style.format("{:,.0f}"),
+            use_container_width=True
+        )
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
