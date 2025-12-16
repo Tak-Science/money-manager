@@ -3,6 +3,8 @@ import pandas as pd
 from datetime import datetime
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+import re
+from collections import defaultdict
 
 # ==================================================
 # Streamlit 設定
@@ -36,11 +38,7 @@ def get_spreadsheet():
 def load_data():
     sheet = get_spreadsheet()
 
-    try:
-        spreadsheet_id = SPREADSHEET_URL.split("/d/")[1].split("/")[0]
-    except IndexError:
-        st.error("SPREADSHEET_URL が正しくありません")
-        st.stop()
+    spreadsheet_id = SPREADSHEET_URL.split("/d/")[1].split("/")[0]
 
     def get_df(sheet_name, range_):
         res = sheet.values().get(
@@ -77,7 +75,7 @@ def get_latest_parameter(df, item, target_date):
     return df.sort_values("適用開始日").iloc[-1]["値"]
 
 # ==================================================
-# 固定費（キャッシュアウト）
+# 固定費
 # ==================================================
 def calculate_monthly_fix_cost(df_fix, today):
     if df_fix.empty:
@@ -86,7 +84,7 @@ def calculate_monthly_fix_cost(df_fix, today):
     df = df_fix.copy()
     df["開始日"] = pd.to_datetime(df["開始日"])
     df["終了日"] = pd.to_datetime(df["終了日"], errors="coerce")
-    df["金額"] = df["金額"].astype(float)
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
 
     active = df[
         (df["開始日"] <= today) &
@@ -96,7 +94,7 @@ def calculate_monthly_fix_cost(df_fix, today):
     return active["金額"].sum()
 
 # ==================================================
-# 変動費（支出）
+# 変動費
 # ==================================================
 def calculate_monthly_variable_cost(df_forms, today):
     if df_forms.empty:
@@ -104,7 +102,7 @@ def calculate_monthly_variable_cost(df_forms, today):
 
     df = df_forms.copy()
     df["日付"] = pd.to_datetime(df["日付"])
-    df["金額"] = df["金額"].astype(float)
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
 
     current_month = today.strftime("%Y-%m")
     df["month"] = df["日付"].dt.strftime("%Y-%m")
@@ -125,7 +123,7 @@ def calculate_monthly_variable_cost(df_forms, today):
     ]["金額"].sum()
 
 # ==================================================
-# 変動収入（臨時収入）
+# 変動収入
 # ==================================================
 def calculate_monthly_variable_income(df_forms, today):
     if df_forms.empty:
@@ -133,7 +131,7 @@ def calculate_monthly_variable_income(df_forms, today):
 
     df = df_forms.copy()
     df["日付"] = pd.to_datetime(df["日付"])
-    df["金額"] = df["金額"].astype(float)
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
 
     current_month = today.strftime("%Y-%m")
     df["month"] = df["日付"].dt.strftime("%Y-%m")
@@ -146,7 +144,7 @@ def calculate_monthly_variable_income(df_forms, today):
     ]["金額"].sum()
 
 # ==================================================
-# NISA 積立計算（A / B / C）
+# NISA 積立計算
 # ==================================================
 def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     mode = get_latest_parameter(df_params, "NISA積立モード", today)
@@ -165,79 +163,73 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
         months_left = years_left * 12
         ideal = (target_asset - current_asset) / months_left
         nisa = max(min(ideal, max_nisa), min_nisa)
-    else:  # モード C
+    else:
         nisa = max(min(available_cash, max_nisa), min_nisa)
 
-    # ★ 余剰を超えない
-    nisa = max(min(nisa, available_cash), 0)
-
-    return nisa, mode
+    return max(min(nisa, available_cash), 0), mode
 
 # ==================================================
-# 赤字分析（想定変動費付き）
+# 赤字分析
 # ==================================================
 def analyze_deficit(monthly_income, fix_cost, variable_cost):
     deficit = monthly_income - fix_cost - variable_cost
     if deficit >= 0:
         return None
 
-    deficit_amount = abs(deficit)
-
     variable_expected = monthly_income * 0.3
-    variable_over = variable_cost - variable_expected
-    fix_over = fix_cost - monthly_income
-
-    if fix_over > 0 and variable_over <= 0:
-        cause = "固定費"
-    elif variable_over > 0 and fix_over <= 0:
-        cause = "変動費"
-    else:
-        cause = "複合要因"
 
     return {
-        "deficit_amount": deficit_amount,
-        "cause": cause,
-        "fix_over": fix_over,
-        "variable_over": variable_over,
+        "deficit_amount": abs(deficit),
+        "fix_over": fix_cost - monthly_income,
+        "variable_over": variable_cost - variable_expected,
         "variable_expected": variable_expected
     }
 
 # ==================================================
-# 満足度が低い支出分析
+# メモ頻出分析（強化版）
 # ==================================================
-def analyze_low_satisfaction_expenses(df_forms, today):
-    if df_forms.empty:
-        return pd.DataFrame()
+def analyze_memo_frequency_advanced(
+    df_forms, today, is_deficit, variable_cost, monthly_income, top_n=5
+):
+    variable_expected = monthly_income * 0.3
+    if not is_deficit and variable_cost <= variable_expected:
+        return []
 
     df = df_forms.copy()
     df["日付"] = pd.to_datetime(df["日付"])
-    df["金額"] = df["金額"].astype(float)
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
     df["満足度"] = pd.to_numeric(df["満足度"], errors="coerce")
 
     current_month = today.strftime("%Y-%m")
     df["month"] = df["日付"].dt.strftime("%Y-%m")
 
-    low_df = df[
+    target = df[
         (df["month"] == current_month) &
-        (df["満足度"] <= 2)
+        (df["満足度"] <= 2) &
+        (df["メモ"].notna())
     ]
 
-    if low_df.empty:
-        return pd.DataFrame()
+    if target.empty:
+        return []
 
-    return (
-        low_df
-        .groupby("費目", as_index=False)
-        .agg(
-            合計金額=("金額", "sum"),
-            回数=("金額", "count"),
-            平均満足度=("満足度", "mean")
-        )
-        .sort_values("合計金額", ascending=False)
-    )
+    memo_stats = defaultdict(lambda: {"count": 0, "amount": 0})
+
+    for _, row in target.iterrows():
+        words = re.findall(r"[一-龥ぁ-んァ-ンA-Za-z0-9]+", str(row["メモ"]))
+        for w in words:
+            memo_stats[w]["count"] += 1
+            memo_stats[w]["amount"] += row["金額"]
+
+    result = [
+        (word, v["count"], v["amount"])
+        for word, v in memo_stats.items()
+    ]
+
+    result.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    return result[:top_n]
 
 # ==================================================
-# 今月サマリー計算
+# 今月サマリー
 # ==================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     base_income = float(get_latest_parameter(df_params, "月収", today))
@@ -251,8 +243,8 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
 
     df_balance = df_balance.copy()
     df_balance["日付"] = pd.to_datetime(df_balance["日付"])
-    df_balance["銀行残高"] = df_balance["銀行残高"].astype(float)
-    df_balance["NISA評価額"] = df_balance["NISA評価額"].astype(float)
+    df_balance["銀行残高"] = pd.to_numeric(df_balance["銀行残高"])
+    df_balance["NISA評価額"] = pd.to_numeric(df_balance["NISA評価額"])
 
     current_asset = (
         df_balance.sort_values("日付")
@@ -280,7 +272,7 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     }
 
 # ==================================================
-# Streamlit UI
+# UI
 # ==================================================
 def main():
     st.title("💰 今月サマリー")
@@ -293,18 +285,12 @@ def main():
     )
 
     col1, col2, col3 = st.columns(3)
-
-    with col1:
-        st.metric("🏦 銀行への積立", f"{int(summary['bank_save']):,} 円")
-
-    with col2:
-        st.metric(
-            f"📈 NISA積立（モード {summary['nisa_mode']}）",
-            f"{int(summary['nisa_save']):,} 円"
-        )
-
-    with col3:
-        st.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
+    col1.metric("🏦 銀行への積立", f"{int(summary['bank_save']):,} 円")
+    col2.metric(
+        f"📈 NISA積立（モード {summary['nisa_mode']}）",
+        f"{int(summary['nisa_save']):,} 円"
+    )
+    col3.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
 
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
@@ -314,11 +300,8 @@ def main():
         f"固定費：{int(summary['fix_cost']):,} 円 / "
         f"変動費：{int(summary['variable_cost']):,} 円"
     )
-    st.caption(
-        f"※ 現在資産：{int(summary['current_asset']):,} 円"
-    )
+    st.caption(f"※ 現在資産：{int(summary['current_asset']):,} 円")
 
-    # 赤字アラート
     deficit = analyze_deficit(
         summary["monthly_income"],
         summary["fix_cost"],
@@ -326,60 +309,41 @@ def main():
     )
 
     if deficit:
-        st.warning(
-            f"⚠️ 今月は {int(deficit['deficit_amount']):,} 円の赤字です"
-        )
+        st.warning(f"⚠️ 今月は {int(deficit['deficit_amount']):,} 円の赤字です")
         st.markdown("**主な要因：**")
 
-        if deficit["cause"] == "固定費":
+        if deficit["fix_over"] > 0:
             st.markdown(
                 f"- 固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
             )
-            st.markdown(
-                f"- 変動費は想定範囲内です  \n"
-                f"  （想定：{int(deficit['variable_expected']):,} 円 / "
-                f"実際：{int(summary['variable_cost']):,} 円）"
-            )
 
-        elif deficit["cause"] == "変動費":
-            st.markdown(
-                f"- 変動費が想定を超えています（+{int(deficit['variable_over']):,} 円）  \n"
-                f"  （想定：{int(deficit['variable_expected']):,} 円 / "
-                f"実際：{int(summary['variable_cost']):,} 円）"
-            )
-            st.markdown("- 固定費は想定内です")
-
-        else:
-            if deficit["fix_over"] > 0:
-                st.markdown(
-                    f"- 固定費がやや高めです（+{int(deficit['fix_over']):,} 円）"
-                )
-            if deficit["variable_over"] > 0:
-                st.markdown(
-                    f"- 変動費も想定を超えています（+{int(deficit['variable_over']):,} 円）  \n"
-                    f"  （想定：{int(deficit['variable_expected']):,} 円 / "
-                    f"実際：{int(summary['variable_cost']):,} 円）"
-                )
-
-    # 振り返り
-    st.subheader("🧠 今月の振り返り（満足度が低めだった支出）")
-
-    low_df = analyze_low_satisfaction_expenses(df_forms, today)
-
-    if low_df.empty:
-        st.success("🎉 今月は満足度の低い支出は特にありませんでした！")
-    else:
-        st.dataframe(
-            low_df.style.format({
-                "合計金額": "{:,.0f} 円",
-                "平均満足度": "{:.1f}"
-            }),
-            use_container_width=True
+        st.markdown(
+            f"- 変動費は想定範囲内です  \n"
+            f"（想定：{int(deficit['variable_expected']):,} 円 / "
+            f"実際：{int(summary['variable_cost']):,} 円）"
         )
+
+    st.subheader("🧠 今月の振り返り（メモ分析）")
+
+    memo = analyze_memo_frequency_advanced(
+        df_forms,
+        today,
+        deficit is not None,
+        summary["variable_cost"],
+        summary["monthly_income"]
+    )
+
+    if not memo:
+        st.success("🎉 気になる頻出メモは特にありませんでした！")
+    else:
+        st.markdown("**控え候補として気になるもの：**")
+        for word, count, amount in memo:
+            st.markdown(
+                f"- **{word}**（{count} 回 / 合計 {int(amount):,} 円）"
+            )
 
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
-
