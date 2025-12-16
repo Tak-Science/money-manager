@@ -23,9 +23,9 @@ def main():
             f"※ 1億円ペースの理想NISA積立：{summary['ideal_nisa']:,} 円 / 月"
         )
         st.caption(
-    f"※ 現在資産：{current_asset:,} 円 / "
-    f"理想資産：{ideal_asset_today:,} 円 "
-    f"（差分 {asset_gap:,} 円）"
+    f"※ 現在資産：{summary['current_asset']:,} 円 / "
+    f"理想資産：{summary['ideal_asset_today']:,} 円 "
+    f"（差分 {summary['asset_gap']:,} 円）"
 )
 
 #imports & ページ設定
@@ -220,6 +220,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
