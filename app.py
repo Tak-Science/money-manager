@@ -607,16 +607,16 @@ deficit = analyze_deficit(
         summary["variable_cost"]
     )
 
-    if deficit:
+if deficit:
         st.warning(f"⚠️ 今月は {int(deficit['deficit_amount']):,} 円の赤字です")
         st.markdown("**主な要因：**")
 
-        if deficit["fix_over"] > 0:
-            st.markdown(
+    if deficit["fix_over"] > 0:
+        st.markdown(
                 f"- 固定費が月収を {int(deficit['fix_over']):,} 円 上回っています"
             )
 
-        st.markdown(
+    st.markdown(
             f"- 変動費は想定範囲内です  \n"
             f"（想定：{int(deficit['variable_expected']):,} 円 / "
             f"実際：{int(summary['variable_cost']):,} 円）"
@@ -798,6 +798,7 @@ deficit = analyze_deficit(
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
