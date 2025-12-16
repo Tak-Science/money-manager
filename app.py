@@ -1,19 +1,27 @@
-#mainの設定
+#mainの設定（Streamlit側のUI設定）
 def main():
     st.title("💰 今月サマリー")
+
+    summary = calculate_monthly_summary_dummy()
 
     col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.metric("銀行への積立", "30,000 円")
+        st.metric("🏦 銀行への積立", f"{summary['bank_save']:,} 円")
 
     with col2:
-        st.metric("NISA積立", "20,000 円")
+        st.metric(
+            "📈 NISA積立",
+            f"{summary['nisa_save']:,} 円",
+            delta=f"{summary['diff_from_past']:,} 円（前年差）"
+        )
 
     with col3:
-        st.metric("自由に使えるお金", "15,000 円")
+        st.metric("🎉 自由に使えるお金", f"{summary['free_money']:,} 円")
 
-    st.caption("※ 1億円ペースとの差：-30,000 円")
+    st.caption(
+        f"※ 1億円ペースとの差：{summary['diff_from_ideal']:,} 円"
+    )
 
 #imports & ページ設定
 import streamlit as st
@@ -112,9 +120,43 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
         "fix_cost": fix_cost,
         "variable_cost": variable_cost,
     }
+def calculate_monthly_summary_dummy():
+    # --- ダミー値 ---
+    monthly_income = 300_000
+    fix_cost = 150_000
+    variable_cost = 60_000
+
+    nisa_target = 33_000
+    bank_target = 20_000
+
+    # --- 計算 ---
+    surplus = monthly_income - fix_cost - variable_cost
+    surplus = max(surplus, 0)
+
+    nisa_save = min(nisa_target, surplus)
+    surplus -= nisa_save
+
+    bank_save = min(bank_target, surplus)
+    surplus -= bank_save
+
+    free_money = surplus
+
+    # --- 差分（ダミー） ---
+    diff_from_past = 5_000
+    diff_from_ideal = -30_000
+
+    return {
+        "bank_save": bank_save,
+        "nisa_save": nisa_save,
+        "free_money": free_money,
+        "diff_from_past": diff_from_past,
+        "diff_from_ideal": diff_from_ideal
+    }
+
 
 
 if __name__ == "__main__":
     main()
+
 
 
