@@ -227,6 +227,55 @@ def analyze_memo_frequency_advanced(
 
     result.sort(key=lambda x: (x[1], x[2]), reverse=True)
     return result[:top_n]
+    
+def analyze_memo_by_category(
+    df_forms,
+    today,
+    is_deficit,
+    variable_cost,
+    monthly_income
+):
+    # 赤字 or 変動費想定超過でなければ表示しない
+    variable_expected = monthly_income * 0.3
+    if not is_deficit and variable_cost <= variable_expected:
+        return {}
+
+    df = df_forms.copy()
+    df["日付"] = pd.to_datetime(df["日付"])
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
+    df["満足度"] = pd.to_numeric(df["満足度"], errors="coerce")
+
+    current_month = today.strftime("%Y-%m")
+    df["month"] = df["日付"].dt.strftime("%Y-%m")
+
+    target = df[
+        (df["month"] == current_month) &
+        (df["満足度"] <= 2) &
+        (df["メモ"].notna())
+    ]
+
+    if target.empty:
+        return {}
+
+    result = {}
+
+    for _, row in target.iterrows():
+        category = row["費目"]
+        memo = row["メモ"]
+
+        if category not in result:
+            result[category] = {}
+
+        if memo not in result[category]:
+            result[category][memo] = {
+                "count": 0,
+                "amount": 0
+            }
+
+        result[category][memo]["count"] += 1
+        result[category][memo]["amount"] += row["金額"]
+
+    return result
 
 # ==================================================
 # 今月サマリー
@@ -341,9 +390,35 @@ def main():
             st.markdown(
                 f"- **{word}**（{count} 回 / 合計 {int(amount):,} 円）"
             )
+    # ==========================================
+    # メモ × カテゴリ × 金額 分析
+    # ==========================================
+    st.subheader("📂 控え候補の内訳（カテゴリ別）")
+
+    category_analysis = analyze_memo_by_category(
+        df_forms,
+        today,
+        deficit is not None,
+        summary["variable_cost"],
+        summary["monthly_income"]
+    )
+
+    if not category_analysis:
+        st.info("カテゴリ別に見直す必要のある支出は特にありませんでした")
+    else:
+        for category, memos in category_analysis.items():
+            st.markdown(f"**費目：{category}**")
+
+            for memo, stats in memos.items():
+                st.markdown(
+                    f"- {memo}：{stats['count']} 回 / "
+                    f"合計 {int(stats['amount']):,} 円"
+                )
+
 
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
