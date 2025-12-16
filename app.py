@@ -169,6 +169,9 @@ def calculate_monthly_summary_dummy():
         "bank_save": bank_save,
         "free_money": free_money,
         "nisa_mode": nisa_mode
+        "current_asset": current_asset,
+        "ideal_asset_today": ideal_asset_today,
+        "asset_gap": asset_gap
     }
 
 
@@ -216,6 +219,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
