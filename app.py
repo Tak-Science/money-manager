@@ -496,6 +496,20 @@ def get_latest_bank_balance(df_balance):
 
     return float(df.iloc[-1]["銀行残高"])
 # ==================================================
+# 最新の銀行口座を取得する関数
+# ==================================================
+def adjust_nisa_by_emergency_status(nisa_amount, safe_cash, ef):
+    """
+    生活防衛費ステータスに応じて NISA 積立額を調整する
+    """
+    if safe_cash < ef["fund_min"]:
+        return 0, "危険ゾーン（完全停止）"
+
+    if safe_cash < ef["fund_rec"]:
+        return int(nisa_amount * 0.5), "最低限ゾーン（50%抑制）"
+
+    return int(nisa_amount), "推奨以上（抑制なし）"
+# ==================================================
 #今月サマリー今月サマリー
 #===================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
@@ -551,13 +565,31 @@ def main():
         df_params, df_fix, df_forms, df_balance, today
     )
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🏦 銀行への積立", f"{int(summary['bank_save']):,} 円")
-    col2.metric(
-        f"📈 NISA積立（モード {summary['nisa_mode']}）",
-        f"{int(summary['nisa_save']):,} 円"
-    )
-    col3.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
+col1, col2, col3 = st.columns(3)
+
+# 元の計算結果
+bank_save = summary["bank_save"]
+nisa_save = summary["nisa_save"]
+free_cash = summary["free_cash"]
+nisa_mode = summary["nisa_mode"]
+
+# 生活防衛費に基づく NISA 調整（ブレーキ）
+safe_cash = get_latest_bank_balance(df_balance)
+adjusted_nisa, nisa_reason = adjust_nisa_by_emergency_status(
+    nisa_amount=nisa_save,
+    safe_cash=safe_cash,
+    ef=ef
+)
+
+# NISAを減らした場合、その分は「銀行への積立」へ戻す（挙動が自然）
+# ※free_cashは「余剰から銀行とNISAを引いた残り」なので、ここでは変えない
+bank_save_adjusted = bank_save + (nisa_save - adjusted_nisa)
+
+col1.metric("🏦 銀行への積立", f"{int(bank_save_adjusted):,} 円")
+col2.metric(f"📈 NISA積立（モード {nisa_mode}）", f"{int(adjusted_nisa):,} 円")
+col3.metric("🎉 自由に使えるお金", f"{int(free_cash):,} 円")
+
+st.caption(f"生活防衛費ステータスによるNISA調整：{nisa_reason}")
 
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
@@ -766,6 +798,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
