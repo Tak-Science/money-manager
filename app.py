@@ -126,42 +126,36 @@ def calculate_monthly_summary(df_params, df_fix, df_balance, df_forms, today):
         "variable_cost": variable_cost,
     }
     
-def calculate_monthly_summary_dummy():
-    # --- ダミー収支 ---
+def calculate_monthly_summary(df_params, today):
+    # --- ダミー収支（後で差し替え） ---
     monthly_income = 300_000
     fix_cost = 150_000
     variable_cost = 60_000
 
-    surplus = monthly_income - fix_cost - variable_cost
-    surplus = max(surplus, 0)
+    surplus = max(monthly_income - fix_cost - variable_cost, 0)
 
-    # --- Parameters（ダミー） ---
+    # --- Parameters から取得 ---
     nisa_mode = get_latest_parameter(df_params, "NISA積立モード", today)
     nisa_min = int(get_latest_parameter(df_params, "NISA最低積立額", today))
     nisa_max = int(get_latest_parameter(df_params, "NISA最大積立額", today))
-    target_asset = int(get_latest_parameter(df_params, "目標資産額", today))
-    ideal_nisa = 50_000  # B用（仮）
 
-    # --- NISA積立 ---
+    # --- 理想NISA（仮） ---
+    ideal_nisa = 90_000
+
     nisa_save, ideal_nisa_save = calculate_nisa_save(
-        nisa_mode,
-        surplus,
-        nisa_min,
-        nisa_max,
-        ideal_nisa
+        nisa_mode, surplus, nisa_min, nisa_max, ideal_nisa
     )
-
     surplus -= nisa_save
 
-    # --- 銀行積立 ---
+    # --- 銀行積立（仮） ---
     bank_save = min(20_000, surplus)
     surplus -= bank_save
 
     free_money = surplus
-    
-    current_asset = 3_000_000      # 現在資産（仮）
-    ideal_asset_today = 3_500_000  # 本来あるべき資産（仮）
 
+    # --- 資産（ダミー） ---
+    current_asset = 3_000_000
+    ideal_asset_today = 3_500_000
     asset_gap = current_asset - ideal_asset_today
 
     return {
@@ -174,9 +168,6 @@ def calculate_monthly_summary_dummy():
         "ideal_asset_today": ideal_asset_today,
         "asset_gap": asset_gap
     }
-
-
-
 
 #NISAの積立額を決める関数
 def calculate_nisa_save(
@@ -219,6 +210,7 @@ def calculate_nisa_save(
 
 if __name__ == "__main__":
     main()
+
 
 
 
