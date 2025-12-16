@@ -3,12 +3,12 @@ import pandas as pd
 import plotly.express as px
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
+from datetime import datetime
 
 # --- 設定 ---
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
 
 # 👇 【重要】ここにあなたのスプレッドシートのURLを貼り付けてください！
-# （例: "https://docs.google.com/spreadsheets/d/1pb1H1twG9XDlo..."）
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=2102244245#gid=2102244245"
 
 st.set_page_config(page_title="Financial Freedom Dashboard", layout="wide")
@@ -26,7 +26,7 @@ def get_spreadsheet():
 def load_data():
     sheet = get_spreadsheet()
     
-    # URLからIDを抽出 ( /d/ と /edit の間の文字列)
+    # URLからIDを抽出
     try:
         spreadsheet_id = SPREADSHEET_URL.split('/d/')[1].split('/')[0]
     except:
@@ -41,23 +41,31 @@ def load_data():
         data = res_p.get('values', [])[1:]
         df_params = pd.DataFrame(data, columns=headers)
         
-        # 「値」列を数値化
+        # 数値化 & 空白除去
         if '値' in df_params.columns:
             df_params['値'] = pd.to_numeric(df_params['値'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+        if '項目' in df_params.columns:
+            df_params['項目'] = df_params['項目'].astype(str).str.strip() # 前後の空白を削除
     except Exception as e:
         st.error(f"Parametersシート読み込みエラー: {e}")
         df_params = pd.DataFrame()
 
-    # 2. Fix_Cost シート
+    # 2. Fix_Cost シート（日付判定のためにG列まで取得）
     try:
-        res_f = sheet.values().get(spreadsheetId=spreadsheet_id, range='Fix_Cost!A:E').execute()
+        # A:G列を取得 (F:開始日, G:終了日 を想定)
+        res_f = sheet.values().get(spreadsheetId=spreadsheet_id, range='Fix_Cost!A:G').execute()
         headers = res_f.get('values', [])[0]
         data = res_f.get('values', [])[1:]
-        df_fix = pd.DataFrame(data, columns=headers)
-        
+        # データ数がヘッダーより少ない場合の調整
+        if data:
+            df_fix = pd.DataFrame(data, columns=headers)
+        else:
+            df_fix = pd.DataFrame(columns=headers)
+
         # 「金額」列を数値化
         if '金額' in df_fix.columns:
             df_fix['金額'] = pd.to_numeric(df_fix['金額'].astype(str).str.replace(',', ''), errors='coerce').fillna(0)
+            
     except Exception as e:
         st.error(f"Fix_Costシート読み込みエラー: {e}")
         df_fix = pd.DataFrame()
@@ -81,11 +89,11 @@ def load_data():
 
 # --- メイン処理 ---
 def main():
-    st.title("💰 Financial Freedom Dashboard v3.3")
+    st.title("💰 Financial Freedom Dashboard v5.2")
     
     # URL未入力チェック
     if "ここに" in SPREADSHEET_URL:
-        st.warning("⚠️ コードの9行目に、スプレッドシートのURLを貼り付けてください！")
+        st.warning("⚠️ コードの12行目に、スプレッドシートのURLを貼り付けてください！")
         st.stop()
 
     # データ読み込み
@@ -100,12 +108,12 @@ def main():
     # 月収 (Parametersから取得)
     monthly_income = 0
     if '項目' in df_params.columns:
-        # まず「月収」を探す
+        # "月収" を探す
         income_row = df_params[df_params['項目'] == '月収']
         if not income_row.empty:
             monthly_income = income_row['値'].values[0]
         else:
-            # なければバックアップで「年収」を探して12で割る
+            # なければ "年収" を探して12で割る
             income_row_y = df_params[df_params['項目'] == '年収']
             if not income_row_y.empty:
                 monthly_income = income_row_y['値'].values[0] / 12
@@ -121,10 +129,49 @@ def main():
             if not asset_row.empty:
                 current_asset = asset_row['値'].values[0]
 
-    # 固定費合計
-    monthly_fixed_cost = 0
-    if not df_fix.empty and '金額' in df_fix.columns:
-        monthly_fixed_cost = df_fix['金額'].sum()
+    # --- 固定費の日付フィルタリング ---
+    # 今日の日付
+    today = datetime.now()
+    
+    # 有効な固定費だけを抽出するリスト
+    valid_costs = []
+    
+    if not df_fix.empty:
+        # 開始日・終了日カラムがあるか確認（なければ全件対象）
+        has_start = '開始日' in df_fix.columns
+        has_end = '終了日' in df_fix.columns
+        
+        for index, row in df_fix.iterrows():
+            is_valid = True
+            
+            # 開始日チェック
+            if has_start and row['開始日'] and str(row['開始日']).strip() != '':
+                try:
+                    start_date = pd.to_datetime(row['開始日'])
+                    if today < start_date:
+                        is_valid = False
+                except:
+                    pass # 日付形式がおかしい場合は無視して有効とする
+
+            # 終了日チェック
+            if has_end and row['終了日'] and str(row['終了日']).strip() != '':
+                try:
+                    end_date = pd.to_datetime(row['終了日'])
+                    if today > end_date:
+                        is_valid = False
+                except:
+                    pass
+
+            if is_valid:
+                valid_costs.append(row)
+    
+    # データフレームに変換し直して合計
+    if valid_costs:
+        df_fix_valid = pd.DataFrame(valid_costs)
+        monthly_fixed_cost = df_fix_valid['金額'].sum()
+    else:
+        monthly_fixed_cost = 0
+
 
     # 生活防衛費係数
     defense_months = 6
@@ -135,7 +182,7 @@ def main():
 
     # --- 2. 計算 ---
 
-    # 簡易手取り (額面 * 0.8)
+    # 簡易手取り (★ご希望通り 税金20%を引く計算を残しました)
     net_income = monthly_income * 0.8 
     
     # 自由資金 (手取り - 固定費)
@@ -154,9 +201,17 @@ def main():
     st.markdown("### 📊 Monthly Status")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("月収 (額面)", f"¥{monthly_income:,.0f}")
-    c2.metric("固定費合計", f"¥{monthly_fixed_cost:,.0f}", delta_color="inverse")
+    c2.metric("固定費合計 (今月分)", f"¥{monthly_fixed_cost:,.0f}", delta_color="inverse")
     c3.metric("手取り (概算)", f"¥{net_income:,.0f}")
-    c4.metric("🔥 自由資金", f"¥{free_cash:,.0f}", delta=f"{(free_cash/net_income)*100:.1f}%")
+    
+    if free_cash >= 0:
+        c4.metric("🔥 自由資金", f"¥{free_cash:,.0f}", delta=f"{(free_cash/net_income)*100:.1f}%")
+    else:
+        c4.metric("🔥 自由資金", f"¥{free_cash:,.0f}", delta="赤字です！", delta_color="inverse")
+
+    # 赤字警告の詳細
+    if free_cash < 0:
+        st.error(f"今月は **¥{abs(free_cash):,.0f}** の赤字予測です。（手取り ¥{net_income:,.0f} - 固定費 ¥{monthly_fixed_cost:,.0f}）")
 
     st.markdown("---")
 
