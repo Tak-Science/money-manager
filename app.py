@@ -562,10 +562,10 @@ def main():
     col3.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
 
     st.caption(f"生活防衛費ステータスによるNISA調整：{nisa_reason}")
-if summary["available_cash"] <= 0:
-    st.caption("※ 今月は収支が赤字のため、積立原資がありません（NISAは 0 円になります）")
-else:
-    st.caption(f"※ 今月の積立原資（余剰資金）：{int(summary['available_cash']):,} 円")
+    if summary["available_cash"] <= 0:
+        st.caption("※ 今月は収支が赤字のため、積立原資がありません（NISAは 0 円になります）")
+    else:
+        st.caption(f"※ 今月の積立原資（余剰資金）：{int(summary['available_cash']):,} 円")
 
     
     st.caption(
@@ -735,4 +735,5 @@ else:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
