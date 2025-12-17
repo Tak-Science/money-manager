@@ -1567,8 +1567,9 @@ def main():
         f"理想NISA比率（開始時点）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% "
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
-    # ---- 直近5年ズームを先に表示（見やすさ優先）
-    # --- 期間スライダー（単色）
+
+    plot_future_simulation_v3(df_view, chart_key="future_sim_all")
+        # --- 期間スライダー（単色）
     min_d = pd.to_datetime(df_sim["date"]).min().date()
     max_d = pd.to_datetime(df_sim["date"]).max().date()
 
@@ -1584,8 +1585,6 @@ def main():
         (pd.to_datetime(df_sim["date"]).dt.date <= end_d)
     )
     df_view = df_sim.loc[mask].copy()
-
-    plot_future_simulation_v3(df_view, chart_key="future_sim_all")
     
     with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
         view = df_sim[df_sim["goal_count"] > 0][
@@ -1601,6 +1600,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
