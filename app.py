@@ -616,127 +616,171 @@ def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     pmt = (fv_target - pv * a) / denom
     return max(float(pmt), 0.0)
 
-
-def simulate_future_paths(
+def simulate_future_paths_v2(
     today,
     current_bank,
     current_nisa,
     monthly_bank_save,
     monthly_nisa_save,
     annual_return,
+    inflation_rate,
     current_age,
     end_age,
-    target_total=100_000_000
+    target_real_today=100_000_000,
+    ideal_nisa_ratio=None,
 ):
     """
-    現実パス：銀行は増えるだけ（利回り0）、NISAは複利で増える
-    理想パス：総資産（銀行+NISA相当）に年利をかけて、目標達成に必要なPMTを逆算
+    現実パス：
+      - 銀行：利回り0で積立
+      - NISA：複利で積立
+
+    理想パス：
+      - 「合計で必要な毎月積立（ideal_pmt）」を逆算
+      - その ideal_pmt を 銀行・NISA に比率配分して内訳も出す
+    実質1億：
+      - 今日の1億円価値を維持するための名目目標を、インフレで月次で増える曲線として出す
     """
     current_bank = float(current_bank)
     current_nisa = float(current_nisa)
     monthly_bank_save = float(monthly_bank_save)
     monthly_nisa_save = float(monthly_nisa_save)
     annual_return = float(annual_return)
+    inflation_rate = float(inflation_rate)
 
-    # 月利
+    # 月利（投資）
     r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
+    # 月次インフレ率（実質目標曲線用）
+    inf_m = (1 + inflation_rate) ** (1 / 12) - 1 if inflation_rate > -1 else 0.0
 
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
 
-    # 現在の総資産
-    pv_total = current_bank + current_nisa
+    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
-    # 理想：目標に必要な「毎月の追加資金（総資産に積むイメージ）」を逆算
+    # 実質1億（今日価値）を維持するための「名目の必要額」曲線
+    # 例：将来は 1億*(1+infl)^(t) の名目が必要
+    target_real_curve = [(float(target_real_today) * ((1 + inf_m) ** i)) for i in range(len(dates))]
+    target_real_end = target_real_curve[-1]
+
+    # 理想：最終時点で「実質1億（今日価値）」を達成する（＝名目では target_real_end が必要）
+    pv_total = current_bank + current_nisa
     ideal_pmt = solve_required_monthly_pmt(
         pv=pv_total,
-        fv_target=float(target_total),
+        fv_target=float(target_real_end),
         r_month=r,
         n_months=months_left
     )
 
-    # シミュレーション（当月を0として months_left+1 点）
-    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
-    out = []
+    # 理想の配分比率（NISAへ何割入れるか）
+    if ideal_nisa_ratio is None:
+        # 今月の計画比率を採用
+        plan_total = monthly_bank_save + monthly_nisa_save
+        ratio = (monthly_nisa_save / plan_total) if plan_total > 0 else 1.0
+    else:
+        ratio = float(ideal_nisa_ratio)
+    ratio = min(max(ratio, 0.0), 1.0)
 
+    # 現実
     bank = current_bank
     nisa = current_nisa
 
-    # 理想側：総資産を1本で扱う（投資されて増える前提）
-    ideal_total = pv_total
+    # 理想（内訳あり）
+    ideal_bank = current_bank
+    ideal_nisa = current_nisa
 
+    out = []
     for i, dt in enumerate(dates):
         total = bank + nisa
+        ideal_total = ideal_bank + ideal_nisa
+
         out.append({
             "date": dt,
             "bank": bank,
             "nisa": nisa,
             "total": total,
+
+            "ideal_bank": ideal_bank,
+            "ideal_nisa": ideal_nisa,
             "ideal_total": ideal_total,
-            "gap_vs_ideal": total - ideal_total,  # 現実 - 理想（マイナスなら遅れ）
-            "ideal_pmt": ideal_pmt
+
+            "gap_vs_ideal": total - ideal_total,
+
+            "target_real_nominal": target_real_curve[i],  # 実質1億(今日価値)に相当する名目目標
+            "ideal_pmt": ideal_pmt,
+            "ideal_nisa_ratio": ratio,
         })
 
-        # 次月へ（最後は更新不要）
         if i == len(dates) - 1:
             break
 
-        # 現実パス：積立 → NISA複利
+        # 次月（現実）
         bank = bank + monthly_bank_save
         nisa = (nisa + monthly_nisa_save) * (1 + r)
 
-        # 理想パス：毎月 ideal_pmt を積立 → 複利
-        ideal_total = (ideal_total + ideal_pmt) * (1 + r)
+        # 次月（理想：理想PMTを比率で配分）
+        ideal_bank = ideal_bank + ideal_pmt * (1 - ratio)  # 銀行は利回り0
+        ideal_nisa = (ideal_nisa + ideal_pmt * ratio) * (1 + r)  # NISAは複利
 
-    return pd.DataFrame(out), ideal_pmt, months_left
+    df_sim = pd.DataFrame(out)
+    return df_sim, ideal_pmt, months_left, target_real_end
 
-
-def plot_future_simulation(df_sim, target_total):
+def plot_future_simulation_v2(df_sim):
     if df_sim.empty:
         st.info("シミュレーションに必要なデータが不足しています。")
         return
 
     fig = go.Figure()
 
-    # 現実（予測）：合計資産
+    # 現実（予測）
     fig.add_trace(go.Scatter(
-        x=df_sim["date"],
-        y=df_sim["total"],
-        mode="lines",
-        name="💰 予測（現実）合計資産",
-        customdata=df_sim[["ideal_total", "gap_vs_ideal"]].values,
+        x=df_sim["date"], y=df_sim["total"],
+        mode="lines", name="💰 予測（現実）合計資産",
+        customdata=df_sim[["ideal_total", "gap_vs_ideal", "target_real_nominal"]].values,
         hovertemplate=(
             "日付: %{x|%Y-%m}<br>"
-            "現実（予測）: %{y:,.0f} 円<br>"
-            "理想: %{customdata[0]:,.0f} 円<br>"
-            "差分（現実-理想）: %{customdata[1]:,.0f} 円"
+            "現実（予測）合計: %{y:,.0f} 円<br>"
+            "理想 合計: %{customdata[0]:,.0f} 円<br>"
+            "差分（現実-理想）: %{customdata[1]:,.0f} 円<br>"
+            "実質1億(今日価値)の名目目標: %{customdata[2]:,.0f} 円"
             "<extra></extra>"
         )
     ))
 
-    # 理想軌道
+    # 理想（合計）
     fig.add_trace(go.Scatter(
-        x=df_sim["date"],
-        y=df_sim["ideal_total"],
-        mode="lines",
-        name="🎯 理想軌道（1億円ペース）",
+        x=df_sim["date"], y=df_sim["ideal_total"],
+        mode="lines", name="🎯 理想 合計（実質1億ペース）",
         line=dict(dash="dash"),
-        hovertemplate="日付: %{x|%Y-%m}<br>理想: %{y:,.0f} 円<extra></extra>"
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # 目標ライン（1億円）
-    fig.add_hline(
-        y=float(target_total),
-        line_dash="dot",
-        annotation_text="🏁 目標：1億円",
-        annotation_position="top left"
-    )
+    # 理想（内訳）
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_bank"],
+        mode="lines", name="🏦 理想 銀行",
+        line=dict(dash="dot"),
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 銀行: %{y:,.0f} 円<extra></extra>"
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_nisa"],
+        mode="lines", name="📈 理想 NISA",
+        line=dict(dash="dot"),
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 NISA: %{y:,.0f} 円<extra></extra>"
+    ))
+
+    # 実質1億（今日価値）を維持するための名目目標カーブ
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["target_real_nominal"],
+        mode="lines", name="🏁 実質1億(今日価値)の名目目標",
+        line=dict(dash="dashdot"),
+        hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
+    ))
 
     fig.update_layout(
-        title="🔮 将来シミュレーション（理想軌道 vs 現実予測）",
+        title="🔮 将来シミュレーション（理想内訳＋実質1億併記）",
         xaxis_title="日付",
         yaxis_title="金額（円）",
         hovermode="x unified",
-        height=520
+        height=560
     )
 
     st.plotly_chart(fig, use_container_width=True)
@@ -951,15 +995,22 @@ def main():
     # ==========================================
     # 将来シミュレーション（1億円ロードマップ）
     # ==========================================
-    st.subheader("🔮 将来シミュレーション（1億円ロードマップ）")
+    st.subheader("🔮 将来シミュレーション（実質1億＋内訳）")
 
-    # Parameters から取得（無ければデフォルト）
-    target_total = to_float_safe(get_latest_parameter(df_params, "目標資産額", today), default=100_000_000.0)
+    # Parameters
     annual_return = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
+    inflation_rate = to_float_safe(get_latest_parameter(df_params, "インフレ率", today), default=0.02)
     end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
 
-    # 現在資産の内訳
+    # 実質1億（今日価値）
+    target_real_today = 100_000_000.0
+
+    # 理想NISA比率（任意）
+    ideal_ratio = get_latest_parameter(df_params, "理想NISA比率", today)
+    ideal_ratio = None if ideal_ratio is None else to_float_safe(ideal_ratio, default=None)
+
+    # 現在資産（内訳）
     current_bank = get_latest_bank_balance(df_balance) or 0.0
     current_nisa = 0.0
     if not df_balance.empty and {"日付", "NISA評価額"}.issubset(df_balance.columns):
@@ -967,34 +1018,41 @@ def main():
         if not dtmp.empty:
             current_nisa = float(pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce") or 0.0)
 
-    # 「今月の計画」を今後も固定で続ける前提（まずはv1）
+    # 今月の計画（このペースが続く前提：月収増は入れない）
     monthly_bank_save_plan = float(bank_save_adjusted)
     monthly_nisa_save_plan = float(adjusted_nisa)
 
-    df_sim, ideal_pmt, months_left = simulate_future_paths(
+    df_sim, ideal_pmt, months_left, target_real_end = simulate_future_paths_v2(
         today=today,
         current_bank=current_bank,
         current_nisa=current_nisa,
         monthly_bank_save=monthly_bank_save_plan,
         monthly_nisa_save=monthly_nisa_save_plan,
         annual_return=annual_return,
+        inflation_rate=inflation_rate,
         current_age=current_age,
         end_age=end_age,
-        target_total=target_total
+        target_real_today=target_real_today,
+        ideal_nisa_ratio=ideal_ratio,
     )
 
-    # 上にサマリ表示（毎月いくら必要か）
     st.caption(
-        f"前提：投資年利 {annual_return*100:.1f}% / 現在年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
+        f"前提：投資年利 {annual_return*100:.1f}% / インフレ率 {inflation_rate*100:.1f}% / "
+        f"年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
     )
-    st.caption(f"理想軌道に必要な毎月の積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（総資産ベース・複利）")
+    st.caption(
+        f"実質1億（今日価値）を達成するための最終名目目標：{int(target_real_end):,} 円"
+    )
+    st.caption(
+        f"理想軌道に必要な毎月の積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（理想NISA比率: {int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}%）"
+    )
 
-    # グラフ
-    plot_future_simulation(df_sim, target_total)
+    plot_future_simulation_v2(df_sim)
 
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
