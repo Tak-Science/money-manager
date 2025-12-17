@@ -791,43 +791,34 @@ def plot_future_simulation_v3(df_sim):
 
     fig = go.Figure()
 
-    # 理想（合計）
+    # ✅ 現実（予測）合計：表示
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"],
+        y=df_sim["total"],
+        mode="lines",
+        name="💰 予測（現実）合計資産",
+        customdata=df_sim[["ideal_total", "gap_vs_ideal", "target_real_nominal"]].values,
+        hovertemplate=(
+            "日付: %{x|%Y-%m}<br>"
+            "現実（予測）合計: %{y:,.0f} 円<br>"
+            "理想 合計: %{customdata[0]:,.0f} 円<br>"
+            "差分（現実-理想）: %{customdata[1]:,.0f} 円<br>"
+            "実質1億(今日価値)の名目目標: %{customdata[2]:,.0f} 円"
+            "<extra></extra>"
+        )
+    ))
+
+    # ✅ 理想（合計）：表示
     fig.add_trace(go.Scatter(
         x=df_sim["date"],
         y=df_sim["ideal_total"],
         mode="lines",
         name="🎯 理想 合計（実質1億ペース）",
-        customdata=df_sim[["ideal_bank", "ideal_nisa", "ideal_nisa_ratio", "target_real_nominal"]].values,
-        hovertemplate=(
-            "日付: %{x|%Y-%m}<br>"
-            "理想 合計: %{y:,.0f} 円<br>"
-            "└ 理想 銀行: %{customdata[0]:,.0f} 円<br>"
-            "└ 理想 NISA: %{customdata[1]:,.0f} 円<br>"
-            "理想NISA比率: %{customdata[2]:.0%}<br>"
-            "実質1億(今日価値)の名目目標: %{customdata[3]:,.0f} 円"
-            "<extra></extra>"
-        )
+        line=dict(dash="dash"),
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # 理想内訳（初期は非表示、凡例クリックで出す）
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["ideal_bank"],
-        mode="lines",
-        name="🏦 理想 銀行",
-        line=dict(dash="dot"),
-        visible="legendonly",
-        hovertemplate="日付: %{x|%Y-%m}<br>理想 銀行: %{y:,.0f} 円<extra></extra>"
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["ideal_nisa"],
-        mode="lines",
-        name="📈 理想 NISA",
-        line=dict(dash="dot"),
-        visible="legendonly",
-        hovertemplate="日付: %{x|%Y-%m}<br>理想 NISA: %{y:,.0f} 円<extra></extra>"
-    ))
-
-    # 実質1億（今日価値）に相当する「名目目標」カーブ（表示）
+    # ✅ 実質1億（名目目標）：表示
     fig.add_trace(go.Scatter(
         x=df_sim["date"],
         y=df_sim["target_real_nominal"],
@@ -837,8 +828,34 @@ def plot_future_simulation_v3(df_sim):
         hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
     ))
 
+    # --- 内訳（必要なら凡例クリックで表示）
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_bank"],
+        mode="lines", name="🏦 理想 銀行",
+        line=dict(dash="dot"),
+        visible="legendonly",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_nisa"],
+        mode="lines", name="📈 理想 NISA",
+        line=dict(dash="dot"),
+        visible="legendonly",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["bank"],
+        mode="lines", name="🏦 現実 銀行（予測）",
+        line=dict(dash="dot"),
+        visible="legendonly",
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["nisa"],
+        mode="lines", name="📈 現実 NISA（予測）",
+        line=dict(dash="dot"),
+        visible="legendonly",
+    ))
+
     fig.update_layout(
-        title="🔮 将来シミュレーション（理想内訳＋実質1億併記）",
+        title="🔮 将来シミュレーション（現実 vs 理想 + 実質1億）",
         xaxis_title="日付",
         yaxis_title="金額（円）",
         hovermode="x unified",
@@ -846,8 +863,7 @@ def plot_future_simulation_v3(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-
-    st.caption("※ 内訳（理想銀行 / 理想NISA）は凡例クリックで表示できます。")
+    st.caption("※ 内訳（理想/現実の銀行・NISA）は凡例クリックで表示できます。")
 # ==================================================
 # Parameters から「比率セット」を取得する関数
 # ==================================================
@@ -899,23 +915,30 @@ def simulate_future_paths_v3_dynamic_ratio(
     today,
     current_bank,
     current_nisa,
+    # 現実（あなたの今月計画）
+    monthly_bank_save_plan,
+    monthly_nisa_save_plan,
+    # 共通パラメータ
     annual_return,
     inflation_rate,
     current_age,
     end_age,
     target_real_today,
+    # 理想（防衛費連動）
     ef,
     ideal_ratios,
     bank_min_monthly=0.0,
 ):
     """
-    生活防衛費ステータスに応じて「理想NISA比率」を月ごとに切り替える理想軌道（内訳つき）
-    - 理想PMT（合計の必要積立）は固定で逆算
-    - 配分比率は「その月の理想銀行（=引き出し用資金）」と防衛費ラインから決定
-    - 実質1億（今日価値）をインフレで名目目標カーブにして追う
+    df_sim に以下を入れる：
+      - 現実：bank / nisa / total（今月計画を固定で継続）
+      - 理想：ideal_bank / ideal_nisa / ideal_total（比率を防衛費で動的に切替）
+      - 実質1億：target_real_nominal（インフレ込み名目目標カーブ）
     """
     current_bank = float(current_bank)
     current_nisa = float(current_nisa)
+    monthly_bank_save_plan = float(monthly_bank_save_plan)
+    monthly_nisa_save_plan = float(monthly_nisa_save_plan)
     annual_return = float(annual_return)
     inflation_rate = float(inflation_rate)
     bank_min_monthly = float(bank_min_monthly)
@@ -932,7 +955,7 @@ def simulate_future_paths_v3_dynamic_ratio(
     target_real_curve = [float(target_real_today) * ((1 + inf_m) ** i) for i in range(len(dates))]
     target_real_end = target_real_curve[-1]
 
-    # 理想：最終名目目標を達成するための毎月積立（総資産ベース）
+    # --- 理想：最終名目目標を達成するための毎月積立（総資産ベース）
     pv_total = current_bank + current_nisa
     ideal_pmt = solve_required_monthly_pmt(
         pv=pv_total,
@@ -941,14 +964,20 @@ def simulate_future_paths_v3_dynamic_ratio(
         n_months=months_left
     )
 
+    # 現実
+    bank = current_bank
+    nisa = current_nisa
+
+    # 理想（内訳あり）
     ideal_bank = current_bank
     ideal_nisa = current_nisa
 
     rows = []
     for i, dt in enumerate(dates):
+        total = bank + nisa
         ideal_total = ideal_bank + ideal_nisa
 
-        # “引き出し用資金” = 理想銀行 と解釈
+        # “引き出し用資金” = 理想銀行 と解釈（比率制御に使う）
         safe_cash_sim = ideal_bank
 
         # ステータスに応じた比率（Parameters由来）
@@ -959,7 +988,7 @@ def simulate_future_paths_v3_dynamic_ratio(
         )
         ratio = min(max(float(ratio), 0.0), 1.0)
 
-        # 銀行最低積立を優先確保
+        # 理想：銀行最低積立を優先確保
         bank_first = min(bank_min_monthly, ideal_pmt)
         remaining = max(ideal_pmt - bank_first, 0.0)
 
@@ -968,19 +997,33 @@ def simulate_future_paths_v3_dynamic_ratio(
 
         rows.append({
             "date": dt,
+
+            # 現実
+            "bank": bank,
+            "nisa": nisa,
+            "total": total,
+
+            # 理想
             "ideal_bank": ideal_bank,
             "ideal_nisa": ideal_nisa,
             "ideal_total": ideal_total,
+
             "ideal_pmt": ideal_pmt,
             "ideal_nisa_ratio": ratio,
+
             "target_real_nominal": target_real_curve[i],
             "safe_cash_sim": safe_cash_sim,
+            "gap_vs_ideal": total - ideal_total,
         })
 
         if i == len(dates) - 1:
             break
 
-        # 次月へ
+        # --- 次月へ（現実）
+        bank = bank + monthly_bank_save_plan
+        nisa = (nisa + monthly_nisa_save_plan) * (1 + r)
+
+        # --- 次月へ（理想）
         ideal_bank = ideal_bank + ideal_bank_add
         ideal_nisa = (ideal_nisa + ideal_nisa_add) * (1 + r)
 
@@ -1231,15 +1274,21 @@ def main():
         today=today,
         current_bank=current_bank,
         current_nisa=current_nisa,
+
+        monthly_bank_save_plan=monthly_bank_save_plan,
+        monthly_nisa_save_plan=monthly_nisa_save_plan,
+
         annual_return=annual_return,
         inflation_rate=inflation_rate,
         current_age=current_age,
         end_age=end_age,
         target_real_today=target_real_today,
+
         ef=ef,
         ideal_ratios=ideal_ratios,
         bank_min_monthly=bank_min_monthly,
     )
+
 
 
     st.caption(
@@ -1269,10 +1318,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
