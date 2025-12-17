@@ -49,8 +49,8 @@ def load_data():
     df_fix     = get_df("Fix_Cost",    "A:G")
     df_forms   = get_df("Forms_Log",   "A:G")
     df_balance = get_df("Balance_Log", "A:C")
-
-    return df_params, df_fix, df_forms, df_balance
+    df_goals   = get_df("Goals", "A:F")
+    return df_params, df_fix, df_forms, df_balance, df_goals
 
 
 # ==================================================
@@ -1228,7 +1228,7 @@ def main():
     st.title("💰 今月サマリー")
 
     # データ読み込み（返り値の順番は load_data と一致させる）
-    df_params, df_fix, df_forms, df_balance = load_data()
+    df_params, df_fix, df_forms, df_balance, df_goals = load_data()
     df_params, df_fix, df_forms, df_balance = preprocess_data(df_params, df_fix, df_forms, df_balance)
 
     today = datetime.today()
@@ -1456,7 +1456,8 @@ def main():
     if not df_balance.empty and {"日付", "NISA評価額"}.issubset(df_balance.columns):
         dtmp = df_balance.dropna(subset=["日付"]).sort_values("日付")
         if not dtmp.empty:
-            current_nisa = float(pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce") or 0.0)
+            v = pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce")
+            current_nisa = 0.0 if pd.isna(v) else float(v)
 
     # 今月の計画（このペースが続く前提：月収増は入れない）
     # ✅ 現実（月次積立）の推定（直近6か月平均）
@@ -1498,8 +1499,6 @@ def main():
         bank_min_monthly=bank_min_monthly,
     )
 
-
-
     st.caption(
         f"前提：投資年利 {annual_return*100:.1f}% / インフレ率 {inflation_rate*100:.1f}% / "
         f"年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
@@ -1514,17 +1513,25 @@ def main():
         f"理想NISA比率（開始時点）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% "
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
+    # ---- 直近5年ズームを先に表示（見やすさ優先）
+    df_5y = df_sim[df_sim["date"] <= (pd.to_datetime(today) + pd.DateOffset(years=5))]
+    plot_future_simulation_v3(df_5y)
+    st.caption("※上は直近5年ズーム表示です（全期間は下のグラフで確認できます）")
 
+    # ---- 全期間表示
+    plot_future_simulation_v3(df_sim)
+
+    
     plot_future_simulation_v3(df_sim)
     with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
-    view = df_sim[df_sim["goal_count"] > 0][
-        ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
-    ].copy()
-    if view.empty:
-        st.info("目標イベントはまだありません。")
-    else:
-        view["date"] = view["date"].dt.strftime("%Y-%m")
-        st.dataframe(view, use_container_width=True)
+        view = df_sim[df_sim["goal_count"] > 0][
+            ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
+        ].copy()
+        if view.empty:
+            st.info("目標イベントはまだありません。")
+        else:
+            view["date"] = view["date"].dt.strftime("%Y-%m")
+            st.dataframe(view, use_container_width=True)
 # ==================================================
 # 実行
 # ==================================================
