@@ -1438,12 +1438,8 @@ def main():
                 st.caption(f"参考（保守的/P75）：達成済み（+{int(abs(gap_p75)):,} 円）")
 
     with st.expander("内訳（月次）を見る"):
-        df_view = pd.DataFrame({
-            "固定費": ef["series_fix"],
-            "変動費": ef["series_var"],
-            "合計": ef["series_total"],
-        })
-        st.dataframe(df_view.style.format("{:,.0f}"), use_container_width=True)
+        df_ef_view = pd.DataFrame({...})
+        st.dataframe(df_ef_view.style.format("{:,.0f}"), use_container_width=True)
 
     # ステータス（3段階 + 帯表示）
     st.subheader("🛡️ 生活防衛費ステータス")
@@ -1615,6 +1611,7 @@ with chart_slot:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
