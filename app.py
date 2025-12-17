@@ -784,6 +784,70 @@ def plot_future_simulation_v2(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
+def plot_future_simulation_v3(df_sim):
+    if df_sim.empty:
+        st.info("シミュレーションに必要なデータが不足しています。")
+        return
+
+    fig = go.Figure()
+
+    # 理想（合計）
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"],
+        y=df_sim["ideal_total"],
+        mode="lines",
+        name="🎯 理想 合計（実質1億ペース）",
+        customdata=df_sim[["ideal_bank", "ideal_nisa", "ideal_nisa_ratio", "target_real_nominal"]].values,
+        hovertemplate=(
+            "日付: %{x|%Y-%m}<br>"
+            "理想 合計: %{y:,.0f} 円<br>"
+            "└ 理想 銀行: %{customdata[0]:,.0f} 円<br>"
+            "└ 理想 NISA: %{customdata[1]:,.0f} 円<br>"
+            "理想NISA比率: %{customdata[2]:.0%}<br>"
+            "実質1億(今日価値)の名目目標: %{customdata[3]:,.0f} 円"
+            "<extra></extra>"
+        )
+    ))
+
+    # 理想内訳（初期は非表示、凡例クリックで出す）
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_bank"],
+        mode="lines",
+        name="🏦 理想 銀行",
+        line=dict(dash="dot"),
+        visible="legendonly",
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 銀行: %{y:,.0f} 円<extra></extra>"
+    ))
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"], y=df_sim["ideal_nisa"],
+        mode="lines",
+        name="📈 理想 NISA",
+        line=dict(dash="dot"),
+        visible="legendonly",
+        hovertemplate="日付: %{x|%Y-%m}<br>理想 NISA: %{y:,.0f} 円<extra></extra>"
+    ))
+
+    # 実質1億（今日価値）に相当する「名目目標」カーブ（表示）
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"],
+        y=df_sim["target_real_nominal"],
+        mode="lines",
+        name="🏁 実質1億(今日価値)の名目目標",
+        line=dict(dash="dashdot"),
+        hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
+    ))
+
+    fig.update_layout(
+        title="🔮 将来シミュレーション（理想内訳＋実質1億併記）",
+        xaxis_title="日付",
+        yaxis_title="金額（円）",
+        hovermode="x unified",
+        height=560
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+
+    st.caption("※ 内訳（理想銀行 / 理想NISA）は凡例クリックで表示できます。")
 # ==================================================
 # Parameters から「比率セット」を取得する関数
 # ==================================================
@@ -1198,13 +1262,14 @@ def main():
     )
 
 
-    plot_future_simulation_v2(df_sim)
+    plot_future_simulation_v3(df_sim)
 
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
