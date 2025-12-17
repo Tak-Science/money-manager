@@ -947,18 +947,6 @@ def plot_future_simulation_v3(
         yaxis_title="金額（円）",
         hovermode="x unified",
         height=560,
-        xaxis=dict(
-            type="date",
-            rangeslider=dict(visible=True),
-            rangeselector=dict(
-                buttons=list([
-                    dict(count=1, label="1年", step="year", stepmode="backward"),
-                    dict(count=3, label="3年", step="year", stepmode="backward"),
-                    dict(count=5, label="5年", step="year", stepmode="backward"),
-                    dict(step="all", label="全期間"),
-                ])
-            ),
-        ),
     )
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
@@ -1580,10 +1568,24 @@ def main():
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
     # ---- 直近5年ズームを先に表示（見やすさ優先）
-    df_5y = df_sim[df_sim["date"] <= (pd.to_datetime(today) + pd.DateOffset(years=5))]
-    plot_future_simulation_v3(df_5y, chart_key="future_sim_5y")
-    st.caption("※上は直近5年ズーム表示です（全期間は下のグラフで確認できます）")
-    plot_future_simulation_v3(df_sim, chart_key="future_sim_all")
+    # --- 期間スライダー（単色）
+    min_d = pd.to_datetime(df_sim["date"]).min().date()
+    max_d = pd.to_datetime(df_sim["date"]).max().date()
+
+    start_d, end_d = st.slider(
+        "表示期間",
+        min_value=min_d,
+        max_value=max_d,
+        value=(min_d, max_d),
+    )
+
+    mask = (
+        (pd.to_datetime(df_sim["date"]).dt.date >= start_d) &
+        (pd.to_datetime(df_sim["date"]).dt.date <= end_d)
+    )
+    df_view = df_sim.loc[mask].copy()
+
+    plot_future_simulation_v3(df_view, chart_key="future_sim_all")
     
     with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
         view = df_sim[df_sim["goal_count"] > 0][
@@ -1599,6 +1601,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
