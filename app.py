@@ -1586,32 +1586,20 @@ def main():
 
     # --- スライダーは下、グラフは上に表示される
     with chart_slot:
-    plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
+        plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
 
     
-    with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
-        view = df_sim[df_sim["goal_count"] > 0][
-            ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
-        ].copy()
-        if view.empty:
-            st.info("目標イベントはまだありません。")
-        else:
-            view["date"] = view["date"].dt.strftime("%Y-%m")
-            st.dataframe(view, use_container_width=True)
+        with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
+            view = df_sim[df_sim["goal_count"] > 0][
+                ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
+            ].copy()
+            if view.empty:
+                st.info("目標イベントはまだありません。")
+            else:
+                view["date"] = view["date"].dt.strftime("%Y-%m")
+                st.dataframe(view, use_container_width=True)
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
-
-
-
-
-
-
-
-
-
-
