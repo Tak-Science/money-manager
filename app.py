@@ -1534,11 +1534,7 @@ def main():
     plot_future_simulation_v3(df_5y, chart_key="future_sim_5y")
     st.caption("※上は直近5年ズーム表示です（全期間は下のグラフで確認できます）")
     plot_future_simulation_v3(df_sim, chart_key="future_sim_all")
-    # ---- 全期間表示
-    plot_future_simulation_v3(df_sim)
-
     
-    plot_future_simulation_v3(df_sim)
     with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
         view = df_sim[df_sim["goal_count"] > 0][
             ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
@@ -1553,6 +1549,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
