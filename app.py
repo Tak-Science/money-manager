@@ -1568,23 +1568,38 @@ def main():
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
 
-    plot_future_simulation_v3(df_view, chart_key="future_sim_all")
-        # --- 期間スライダー（単色）
-    min_d = pd.to_datetime(df_sim["date"]).min().date()
-    max_d = pd.to_datetime(df_sim["date"]).max().date()
+    # --- グラフ描画場所を先に確保（見た目としてはバーが下に出せる）
+    chart_slot = st.empty()
+
+    # --- 期間スライダー（単色）
+    df_sim["date"] = pd.to_datetime(df_sim["date"], errors="coerce")
+    min_d = df_sim["date"].min().date()
+    max_d = df_sim["date"].max().date()
 
     start_d, end_d = st.slider(
         "表示期間",
         min_value=min_d,
         max_value=max_d,
         value=(min_d, max_d),
+        key="sim_range",
     )
 
-    mask = (
-        (pd.to_datetime(df_sim["date"]).dt.date >= start_d) &
-        (pd.to_datetime(df_sim["date"]).dt.date <= end_d)
-    )
-    df_view = df_sim.loc[mask].copy()
+    # --- 絞り込み（date列は保持される）
+    mask = (df_sim["date"].dt.date >= start_d) & (df_sim["date"].dt.date <= end_d)
+    df_sim_view = df_sim.loc[mask].copy()
+
+    # --- スライダーは下、グラフは上に表示される
+    with chart_slot:
+        plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
+
+# --- 絞り込み（date列は保持される）
+mask = (df_sim["date"].dt.date >= start_d) & (df_sim["date"].dt.date <= end_d)
+df_sim_view = df_sim.loc[mask].copy()
+
+# --- スライダーは下、グラフは上に表示される
+with chart_slot:
+    plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
+
     
     with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
         view = df_sim[df_sim["goal_count"] > 0][
@@ -1600,6 +1615,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
