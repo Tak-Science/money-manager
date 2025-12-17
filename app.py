@@ -1061,8 +1061,11 @@ def simulate_future_paths_v3_dynamic_ratio(
         used_ideal_bank = used_ideal_nisa = 0.0
 
         if outflow > 0:
-            bank, nisa, used_bank, used_nisa = apply_outflow_bank_first(bank, nisa, outflow)
-            ideal_bank, ideal_nisa, used_ideal_bank, used_ideal_nisa = apply_outflow_bank_first(ideal_bank, ideal_nisa, outflow)
+            bank, nisa, used_bank, used_nisa, unpaid_real = apply_outflow_bank_first(bank, nisa, outflow)
+            ideal_bank, ideal_nisa, used_ideal_bank, used_ideal_nisa, unpaid_ideal = apply_outflow_bank_first(ideal_bank, ideal_nisa, outflow)
+        else:
+            unpaid_real = 0.0
+            unpaid_ideal = 0.0
 
         total = bank + nisa
         ideal_total = ideal_bank + ideal_nisa
@@ -1130,6 +1133,10 @@ def simulate_future_paths_v3_dynamic_ratio(
             "goal_note": goal_note,
 
             "gap_vs_ideal": total - ideal_total,
+            "outflow_unpaid_real": unpaid_real,
+            "outflow_unpaid_ideal": unpaid_ideal,
+            "outflow_ok_real": (unpaid_real <= 0),
+             "outflow_ok_ideal": (unpaid_ideal <= 0),
         })
 
         if i == len(dates) - 1:
@@ -1256,10 +1263,6 @@ def prepare_goals_events(df_goals, today):
 # 「銀行→不足ならNISA」順で支出を引く関数
 # ==================================================
 def apply_outflow_bank_first(bank, nisa, outflow):
-    """
-    支出を銀行→NISAの順で差し引く。
-    戻り値: new_bank, new_nisa, used_bank, used_nisa
-    """
     bank = float(bank)
     nisa = float(nisa)
     outflow = float(outflow)
@@ -1270,8 +1273,9 @@ def apply_outflow_bank_first(bank, nisa, outflow):
 
     use_nisa = min(nisa, remain)
     nisa -= use_nisa
+    remain2 = remain - use_nisa  # ← ここが未払い
 
-    return bank, nisa, use_bank, use_nisa
+    return bank, nisa, use_bank, use_nisa, remain2
 # ==================================================
 # UI
 # ==================================================
@@ -1598,11 +1602,41 @@ def main():
     # --- グラフ描画（上のslotに差し込む）
     with chart_slot.container():
         plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
+    st.markdown("### 🧾 シミュレーション詳細（表示期間内）")
 
+    tab1, tab2 = st.tabs(["💸 支出", "🎯 目標"])
+
+    with tab1:
+        out = df_sim_view[df_sim_view["outflow"].fillna(0) > 0].copy()
+        if out.empty:
+            st.info("表示期間内に支出イベントはありません。")
+        else:
+            out["月"] = out["date"].dt.strftime("%Y-%m")
+            out["支出"] = out["outflow"].astype(float)
+            out["払えた？（現実）"] = out["outflow_ok_real"].map(lambda x: "✅" if x else "❌")
+            out["未払い（現実）"] = out["outflow_unpaid_real"].astype(float)
+            out["払えた？（理想）"] = out["outflow_ok_ideal"].map(lambda x: "✅" if x else "❌")
+            out["未払い（理想）"] = out["outflow_unpaid_ideal"].astype(float)
+
+            view = out[["月", "支出", "払えた？（現実）", "未払い（現実）", "払えた？（理想）", "未払い（理想）"]]
+            st.dataframe(view, use_container_width=True)
+
+    with tab2:
+        g = df_sim_view[df_sim_view["goal_count"].fillna(0) > 0].copy()
+        if g.empty:
+            st.info("表示期間内に目標チェックはありません。")
+        else:
+            g["月"] = g["date"].dt.strftime("%Y-%m")
+            g["到達？（現実）"] = (g["goal_achieved_real"] == g["goal_count"]).map(lambda x: "✅" if x else "❌")
+            g["到達？（理想）"] = (g["goal_achieved_ideal"] == g["goal_count"]).map(lambda x: "✅" if x else "❌")
+
+            view = g[["月", "goal_note", "goal_count", "goal_achieved_real", "到達？（現実）", "goal_achieved_ideal", "到達？（理想）"]]
+            st.dataframe(view, use_container_width=True)
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
