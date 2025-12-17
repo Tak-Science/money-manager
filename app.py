@@ -784,7 +784,7 @@ def plot_future_simulation_v2(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
+def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_key="future_sim"):
     if df_sim.empty:
         st.info("シミュレーションに必要なデータが不足しています。")
         return
@@ -912,7 +912,7 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
         height=560
     )
 
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
     st.caption("※ 内訳（銀行/NISA）や目標マーカーは凡例クリックで表示できます。")
 # ==================================================
 # Parameters から「比率セット」を取得する関数
@@ -1531,9 +1531,9 @@ def main():
     )
     # ---- 直近5年ズームを先に表示（見やすさ優先）
     df_5y = df_sim[df_sim["date"] <= (pd.to_datetime(today) + pd.DateOffset(years=5))]
-    plot_future_simulation_v3(df_5y)
+    plot_future_simulation_v3(df_5y, chart_key="future_sim_5y")
     st.caption("※上は直近5年ズーム表示です（全期間は下のグラフで確認できます）")
-
+    plot_future_simulation_v3(df_sim, chart_key="future_sim_all")
     # ---- 全期間表示
     plot_future_simulation_v3(df_sim)
 
@@ -1553,6 +1553,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
