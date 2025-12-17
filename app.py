@@ -831,6 +831,7 @@ def choose_ideal_nisa_ratio_by_emergency_from_params(
 # 将来シミュレーションを「月ごと比率」に対応させる関数
 # ==================================================
 def simulate_future_paths_v3_dynamic_ratio(
+    *,
     today,
     current_bank,
     current_nisa,
@@ -840,13 +841,14 @@ def simulate_future_paths_v3_dynamic_ratio(
     end_age,
     target_real_today,
     ef,
-    # 比率のルール（固定値でもOK）
-    r_safe=0.85, r_rec=0.70, r_min=0.50, r_danger=0.0,
+    ideal_ratios,
     bank_min_monthly=0.0,
 ):
     """
-    理想：毎月の必要積立 ideal_pmt は固定（逆算）
-    ただし、配分比率（NISA vs 銀行）を「その月の安全資金（理想銀行）」に応じて動かす
+    生活防衛費ステータスに応じて「理想NISA比率」を月ごとに切り替える理想軌道（内訳つき）
+    - 理想PMT（合計の必要積立）は固定で逆算
+    - 配分比率は「その月の理想銀行（=引き出し用資金）」と防衛費ラインから決定
+    - 実質1億（今日価値）をインフレで名目目標カーブにして追う
     """
     current_bank = float(current_bank)
     current_nisa = float(current_nisa)
@@ -854,45 +856,53 @@ def simulate_future_paths_v3_dynamic_ratio(
     inflation_rate = float(inflation_rate)
     bank_min_monthly = float(bank_min_monthly)
 
+    # 月利（投資）
     r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
+    # 月次インフレ率（実質目標曲線用）
     inf_m = (1 + inflation_rate) ** (1 / 12) - 1 if inflation_rate > -1 else 0.0
 
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
-    target_real_curve = [(float(target_real_today) * ((1 + inf_m) ** i)) for i in range(len(dates))]
+    # 実質1億（今日価値）→ 将来必要な名目目標カーブ
+    target_real_curve = [float(target_real_today) * ((1 + inf_m) ** i) for i in range(len(dates))]
     target_real_end = target_real_curve[-1]
 
+    # 理想：最終名目目標を達成するための毎月積立（総資産ベース）
     pv_total = current_bank + current_nisa
     ideal_pmt = solve_required_monthly_pmt(
-        pv=pv_total, fv_target=float(target_real_end), r_month=r, n_months=months_left
+        pv=pv_total,
+        fv_target=float(target_real_end),
+        r_month=r,
+        n_months=months_left
     )
 
     ideal_bank = current_bank
     ideal_nisa = current_nisa
 
-    out = []
+    rows = []
     for i, dt in enumerate(dates):
         ideal_total = ideal_bank + ideal_nisa
 
-        # その月の「安全資金」は理想銀行（＝いつでも引き出せる資金）と解釈
+        # “引き出し用資金” = 理想銀行 と解釈
         safe_cash_sim = ideal_bank
 
-        # 防衛費ステータスに応じて比率を変える
+        # ステータスに応じた比率（Parameters由来）
         ratio = choose_ideal_nisa_ratio_by_emergency_from_params(
             safe_cash=safe_cash_sim,
             ef=ef,
             ratios=ideal_ratios
         )
+        ratio = min(max(float(ratio), 0.0), 1.0)
 
-        # 銀行最低積立を先に確保（残りを比率配分）
+        # 銀行最低積立を優先確保
         bank_first = min(bank_min_monthly, ideal_pmt)
         remaining = max(ideal_pmt - bank_first, 0.0)
 
         ideal_bank_add = bank_first + remaining * (1 - ratio)
         ideal_nisa_add = remaining * ratio
 
-        out.append({
+        rows.append({
             "date": dt,
             "ideal_bank": ideal_bank,
             "ideal_nisa": ideal_nisa,
@@ -906,11 +916,12 @@ def simulate_future_paths_v3_dynamic_ratio(
         if i == len(dates) - 1:
             break
 
-        # 更新：銀行は利回り0、NISAは複利
+        # 次月へ
         ideal_bank = ideal_bank + ideal_bank_add
         ideal_nisa = (ideal_nisa + ideal_nisa_add) * (1 + r)
 
-    return pd.DataFrame(out), ideal_pmt, months_left, target_real_end
+    df_sim = pd.DataFrame(rows)
+    return df_sim, ideal_pmt, months_left, target_real_end
 # ==================================================
 # UI
 # ==================================================
@@ -1138,6 +1149,7 @@ def main():
     ideal_ratio = get_latest_parameter(df_params, "理想NISA比率", today)
     ideal_ratio = None if ideal_ratio is None else to_float_safe(ideal_ratio, default=None)
     ideal_ratios = get_ideal_nisa_ratios_from_params(df_params, today)
+    bank_min_monthly = to_float_safe(get_latest_parameter(df_params, "銀行最低積立額", today), default=0.0)
 
     # 現在資産（内訳）
     current_bank = get_latest_bank_balance(df_balance) or 0.0
@@ -1161,7 +1173,7 @@ def main():
         end_age=end_age,
         target_real_today=target_real_today,
         ef=ef,
-        ideal_ratios=ideal_ratios,      # ← これを追加
+        ideal_ratios=ideal_ratios,
         bank_min_monthly=bank_min_monthly,
     )
 
@@ -1193,6 +1205,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
