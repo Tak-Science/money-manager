@@ -1573,11 +1573,13 @@ def main():
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
 
-    # --- グラフ描画場所を先に確保（見た目としてはバーが下に出せる）
+    # --- グラフ描画場所を先に確保（上に出すため）
     chart_slot = st.empty()
 
     # --- 期間スライダー（単色）
     df_sim["date"] = pd.to_datetime(df_sim["date"], errors="coerce")
+    df_sim = df_sim.dropna(subset=["date"])
+
     min_d = df_sim["date"].min().date()
     max_d = df_sim["date"].max().date()
 
@@ -1589,27 +1591,18 @@ def main():
         key="sim_range",
     )
 
-    # --- 絞り込み（date列は保持される）
+    # --- 絞り込み
     mask = (df_sim["date"].dt.date >= start_d) & (df_sim["date"].dt.date <= end_d)
     df_sim_view = df_sim.loc[mask].copy()
 
-    # --- スライダーは下、グラフは上に表示される
-    with chart_slot:
+    # --- グラフ描画（上のslotに差し込む）
+    with chart_slot.container():
         plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
 
-    
-        with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
-            view = df_sim[df_sim["goal_count"] > 0][
-                ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
-            ].copy()
-            if view.empty:
-                st.info("目標イベントはまだありません。")
-            else:
-                view["date"] = view["date"].dt.strftime("%Y-%m")
-                st.dataframe(view, use_container_width=True)
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
