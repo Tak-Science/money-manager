@@ -1030,6 +1030,39 @@ def simulate_future_paths_v3_dynamic_ratio(
     df_sim = pd.DataFrame(rows)
     return df_sim, ideal_pmt, months_left, target_real_end
 # ==================================================
+# 直近6か月の平均積立を推定関数
+# ==================================================
+def estimate_realistic_monthly_contribution(df_balance, months=6):
+    """
+    Balance_Log から「合計資産の月次増分」を推定し、直近monthsか月の平均を返す。
+    ※銀行+NISAの合計増分なので、内訳比率で按分して bank/nisa を作るのに使う。
+    """
+    if df_balance.empty:
+        return 0.0
+
+    df = df_balance.copy()
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
+    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce")
+    df = df.dropna(subset=["日付"]).sort_values("日付")
+
+    if df.empty or len(df) < 2:
+        return 0.0
+
+    df["total"] = df["銀行残高"].fillna(0) + df["NISA評価額"].fillna(0)
+    # 月単位に丸めて最後の値を採用
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+    monthly_last = df.groupby("month", as_index=False)["total"].last()
+
+    monthly_last["diff"] = monthly_last["total"].diff()
+    diffs = monthly_last["diff"].dropna().tail(months)
+
+    if diffs.empty:
+        return 0.0
+
+    # “積立っぽい増分”なのでマイナスは0扱い（保守的）
+    return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+# ==================================================
 # UI
 # ==================================================
 def main():
@@ -1267,8 +1300,24 @@ def main():
             current_nisa = float(pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce") or 0.0)
 
     # 今月の計画（このペースが続く前提：月収増は入れない）
-    monthly_bank_save_plan = float(bank_save_adjusted)
-    monthly_nisa_save_plan = float(adjusted_nisa)
+    # ✅ 現実（月次積立）の推定（直近6か月平均）
+    real_total_pmt = estimate_realistic_monthly_contribution(df_balance, months=6)
+
+    # 内訳：今月の配分（銀行: NISA）を使って按分（両方0なら安全に50:50）
+    den = float(bank_save_adjusted + adjusted_nisa)
+    if den > 0:
+        nisa_share = adjusted_nisa / den
+    else:
+        nisa_share = 0.5
+
+    monthly_nisa_save_plan = real_total_pmt * nisa_share
+    monthly_bank_save_plan = real_total_pmt * (1 - nisa_share)
+
+    st.caption(
+        f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月 "
+        f"（銀行 {int(monthly_bank_save_plan):,} ・NISA {int(monthly_nisa_save_plan):,}）"
+    )
+
 
     df_sim, ideal_pmt, months_left, target_real_end = simulate_future_paths_v3_dynamic_ratio(
         today=today,
@@ -1318,3 +1367,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
