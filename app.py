@@ -830,7 +830,6 @@ def choose_ideal_nisa_ratio_by_emergency_from_params(
 # ==================================================
 # 将来シミュレーションを「月ごと比率」に対応させる関数
 # ==================================================
-bank_min_monthly = to_float_safe(get_latest_parameter(df_params, "銀行最低積立額", today), default=0.0)
 def simulate_future_paths_v3_dynamic_ratio(
     today,
     current_bank,
@@ -1130,6 +1129,7 @@ def main():
     inflation_rate = to_float_safe(get_latest_parameter(df_params, "インフレ率", today), default=0.02)
     end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
+    bank_min_monthly = to_float_safe(get_latest_parameter(df_params, "銀行最低積立額", today), default=0.0)
 
     # 実質1億（今日価値）
     target_real_today = 100_000_000.0
@@ -1193,6 +1193,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
