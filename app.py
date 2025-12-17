@@ -1224,6 +1224,9 @@ def apply_outflow_bank_first(bank, nisa, outflow):
 # ==================================================
 # UI
 # ==================================================
+import time
+st.caption(f"DEBUG: build={int(time.time())}")
+
 def main():
     st.title("💰 今月サマリー")
 
@@ -1537,3 +1540,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
