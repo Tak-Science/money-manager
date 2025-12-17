@@ -846,33 +846,33 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
     # ---- Goals 表示（線は増やさずイベントだけ）
     if show_goals:
         # 支出（outflow>0）の月に縦線
-out_df = df_sim[df_sim["outflow"].fillna(0) > 0].copy()
-out_df = out_df.head(max_goal_marks)
+        out_df = df_sim[df_sim["outflow"].fillna(0) > 0].copy()
+        out_df = out_df.head(max_goal_marks)
 
-for _, r in out_df.iterrows():
-    x = pd.to_datetime(r["date"]).to_pydatetime()
-    amt = float(r["outflow"])
+        for _, r in out_df.iterrows():
+            x = pd.to_datetime(r["date"]).to_pydatetime()
+            amt = float(r["outflow"])
 
-    # ① 縦線（注釈は付けない）
-    fig.add_vline(
-        x=x,
-        line_dash="dot",
-        line_width=1,
-        opacity=0.6,
-    )
+            # ① 縦線（注釈は付けない）
+            fig.add_vline(
+                x=x,
+                line_dash="dot",
+                line_width=1,
+                opacity=0.6,
+            )
 
-    # ② 注釈は別で追加（これなら落ちない）
-    fig.add_annotation(
-        x=x,
-        y=1.0,
-        yref="paper",
-        text=f"支出 -{int(amt):,}",
-        showarrow=False,
-        xanchor="left",
-        yanchor="top",
-        font=dict(size=10),
-        opacity=0.8,
-    )
+            # ② 注釈は別で追加（これなら落ちない）
+            fig.add_annotation(
+                x=x,
+                y=1.0,
+                yref="paper",
+                text=f"支出 -{int(amt):,}",
+                showarrow=False,
+                xanchor="left",
+                yanchor="top",
+                font=dict(size=10),
+                opacity=0.8,
+            )
 
         # 目標（goal_count>0）の期限月に達成/未達マーカー（現実）
         goal_df = df_sim[df_sim["goal_count"].fillna(0) > 0].copy()
@@ -1553,6 +1553,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
