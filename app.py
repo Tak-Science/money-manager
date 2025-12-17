@@ -998,7 +998,7 @@ def choose_ideal_nisa_ratio_by_emergency_from_params(
 # ==================================================
 # 将来シミュレーションを「月ごと比率」に対応させる関数
 # ==================================================
-def simulate_future_goal_note = f"{first['name']}（{int(first['amount']):,}円）"_dynamic_ratio(
+def simulate_future_paths_v3_dynamic_ratio(
     *,
     today,
     current_bank,
@@ -1101,10 +1101,11 @@ def simulate_future_goal_note = f"{first['name']}（{int(first['amount']):,}円�
         goal_note = ""
 
         if goal_count > 0:
-            # 代表1件だけ注釈（多いと汚くなるため）
             first = goal_items[0]
             goal_note = f"{first['name']}（{int(first['amount']):,}円）"
-            goal_name = ""
+        else:
+            goal_note = ""
+
             if goal_count > 0:
                 first = goal_items[0]
                 goal_name = first["name"]
@@ -1656,7 +1657,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
-
-
