@@ -784,20 +784,35 @@ def plot_future_simulation_v2(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_key="future_sim"):
-    if df_sim.empty:
+import plotly.graph_objects as go
+import pandas as pd
+import streamlit as st
+
+def plot_future_simulation_v3(
+    df_sim,
+    show_goals=True,
+    max_goal_marks=12,
+    chart_key="future_sim",
+):
+    if df_sim is None or df_sim.empty:
         st.info("シミュレーションに必要なデータが不足しています。")
         return
 
+    df = df_sim.copy()
+    df["date"] = pd.to_datetime(df["date"], errors="coerce")
+    df = df.dropna(subset=["date"]).sort_values("date")
+
     fig = go.Figure()
 
-    # 現実（合計）
+    # -------------------------
+    # メイン3本（現実・理想・名目目標）
+    # -------------------------
     fig.add_trace(go.Scatter(
-        x=df_sim["date"],
-        y=df_sim["total"],
+        x=df["date"],
+        y=df["total"],
         mode="lines",
         name="💰 予測（現実）合計資産",
-        customdata=df_sim[["ideal_total", "gap_vs_ideal", "target_real_nominal"]].values,
+        customdata=df[["ideal_total", "gap_vs_ideal", "target_real_nominal"]].values,
         hovertemplate=(
             "日付: %{x|%Y-%m}<br>"
             "現実（予測）合計: %{y:,.0f} 円<br>"
@@ -808,111 +823,146 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_
         )
     ))
 
-    # 理想（合計）
     fig.add_trace(go.Scatter(
-        x=df_sim["date"],
-        y=df_sim["ideal_total"],
+        x=df["date"],
+        y=df["ideal_total"],
         mode="lines",
         name="🎯 理想 合計（実質1億ペース）",
         line=dict(dash="dash"),
         hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # 名目目標カーブ
     fig.add_trace(go.Scatter(
-        x=df_sim["date"],
-        y=df_sim["target_real_nominal"],
+        x=df["date"],
+        y=df["target_real_nominal"],
         mode="lines",
         name="🏁 実質1億(今日価値)の名目目標",
         line=dict(dash="dashdot"),
         hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # 内訳（legendonly）
+    # -------------------------
+    # 内訳（初期は凡例クリックで表示）
+    # -------------------------
     for col, nm in [
         ("ideal_bank", "🏦 理想 銀行"),
         ("ideal_nisa", "📈 理想 NISA"),
         ("bank", "🏦 現実 銀行（予測）"),
         ("nisa", "📈 現実 NISA（予測）"),
     ]:
-        fig.add_trace(go.Scatter(
-            x=df_sim["date"], y=df_sim[col],
-            mode="lines",
-            name=nm,
-            line=dict(dash="dot"),
-            visible="legendonly"
-        ))
-
-    # ---- Goals 表示（線は増やさずイベントだけ）
-    if show_goals:
-        # 支出（outflow>0）の月に縦線
-        out_df = df_sim[df_sim["outflow"].fillna(0) > 0].copy()
-        out_df = out_df.head(max_goal_marks)
-
-        for _, r in out_df.iterrows():
-            x = pd.to_datetime(r["date"]).to_pydatetime()
-            amt = float(r["outflow"])
-
-            # ① 縦線（注釈は付けない）
-            fig.add_vline(
-                x=x,
-                line_dash="dot",
-                line_width=1,
-                opacity=0.6,
-            )
-
-            # ② 注釈は別で追加（これなら落ちない）
-            fig.add_annotation(
-                x=x,
-                y=1.0,
-                yref="paper",
-                text=f"支出 -{int(amt):,}",
-                showarrow=False,
-                xanchor="left",
-                yanchor="top",
-                font=dict(size=10),
-                opacity=0.8,
-            )
-
-        # 目標（goal_count>0）の期限月に達成/未達マーカー（現実）
-        goal_df = df_sim[df_sim["goal_count"].fillna(0) > 0].copy()
-        goal_df = goal_df.head(max_goal_marks)
-
-        if not goal_df.empty:
-            # 目標が複数ある月もあるので、達成率で色分けしたいところだが、
-            # いったん marker のテキストで表現する（スッキリ重視）
-            goal_df["goal_status"] = goal_df.apply(
-                lambda r: "🟢" if r["goal_achieved_real"] == r["goal_count"] else "🔴",
-                axis=1
-            )
-
+        if col in df.columns:
             fig.add_trace(go.Scatter(
-                x=goal_df["date"],
-                y=goal_df["total"],
-                mode="markers",
-                name="🎯 目標チェック（現実）",
-                marker=dict(size=10),
-                text=goal_df["goal_status"],
-                hovertemplate=(
-                    "日付: %{x|%Y-%m}<br>"
-                    "現実 合計: %{y:,.0f} 円<br>"
-                    "目標: %{customdata[0]}<br>"
-                    "達成（現実）: %{customdata[1]}/%{customdata[2]}"
-                    "<extra></extra>"
-                ),
-                customdata=goal_df[["goal_note", "goal_achieved_real", "goal_count"]].values,
-                visible="legendonly"  # 初期は非表示（汚さない）
+                x=df["date"],
+                y=df[col],
+                mode="lines",
+                name=nm,
+                line=dict(dash="dot"),
+                visible="legendonly",
+                hovertemplate="日付: %{x|%Y-%m}<br>%{y:,.0f} 円<extra></extra>"
             ))
 
+    # -------------------------
+    # Goals（汚くならないように自動で間引く）
+    #  - 支出：縦線 + 注釈（多すぎる場合は注釈を間引く）
+    #  - 目標：マーカー（legendonly）
+    # -------------------------
+    if show_goals:
+        # 支出イベント
+        if "outflow" in df.columns:
+            out_df = df[df["outflow"].fillna(0) > 0].copy()
+            if not out_df.empty:
+                out_df = out_df.sort_values("date").head(max_goal_marks)
+
+                # 注釈は多いと邪魔なので、最大でも4つくらいに制限
+                max_labels = 4
+                label_idx = set()
+                if len(out_df) <= max_labels:
+                    label_idx = set(range(len(out_df)))
+                else:
+                    # 等間隔に選ぶ
+                    for k in range(max_labels):
+                        label_idx.add(int(round(k * (len(out_df) - 1) / (max_labels - 1))))
+
+                for i, r in enumerate(out_df.itertuples()):
+                    x = pd.to_datetime(r.date).to_pydatetime()
+                    amt = float(getattr(r, "outflow"))
+
+                    # 縦線（これは全部出してOK）
+                    fig.add_vline(
+                        x=x,
+                        line_dash="dot",
+                        line_width=1,
+                        opacity=0.5,
+                    )
+
+                    # 注釈は間引く
+                    if i in label_idx:
+                        fig.add_annotation(
+                            x=x,
+                            y=1.0,
+                            yref="paper",
+                            text=f"支出 -{int(amt):,}",
+                            showarrow=False,
+                            xanchor="left",
+                            yanchor="top",
+                            font=dict(size=10),
+                            opacity=0.8,
+                        )
+
+        # 目標チェック（期限月）
+        if {"goal_count", "goal_achieved_real", "goal_note"}.issubset(df.columns):
+            goal_df = df[df["goal_count"].fillna(0) > 0].copy()
+            if not goal_df.empty:
+                goal_df = goal_df.sort_values("date").head(max_goal_marks)
+
+                goal_df["goal_status"] = goal_df.apply(
+                    lambda r: "🟢" if r["goal_achieved_real"] == r["goal_count"] else "🔴",
+                    axis=1
+                )
+
+                fig.add_trace(go.Scatter(
+                    x=goal_df["date"],
+                    y=goal_df["total"],
+                    mode="markers",
+                    name="🎯 目標チェック（現実）",
+                    marker=dict(size=10),
+                    text=goal_df["goal_status"],
+                    customdata=goal_df[["goal_note", "goal_achieved_real", "goal_count"]].values,
+                    hovertemplate=(
+                        "日付: %{x|%Y-%m}<br>"
+                        "現実 合計: %{y:,.0f} 円<br>"
+                        "目標: %{customdata[0]}<br>"
+                        "達成（現実）: %{customdata[1]}/%{customdata[2]}"
+                        "<extra></extra>"
+                    ),
+                    visible="legendonly",
+                ))
+
+    # -------------------------
+    # ★ 期間スライダー（バー） + ボタン
+    # -------------------------
     fig.update_layout(
         title="🔮 将来シミュレーション（現実 vs 理想 + 実質1億 + Goals）",
         xaxis_title="日付",
         yaxis_title="金額（円）",
         hovermode="x unified",
-        height=560
+        height=560,
+        xaxis=dict(
+            type="date",
+            rangeslider=dict(visible=True),
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1年", step="year", stepmode="backward"),
+                    dict(count=3, label="3年", step="year", stepmode="backward"),
+                    dict(count=5, label="5年", step="year", stepmode="backward"),
+                    dict(step="all", label="全期間"),
+                ])
+            ),
+        ),
     )
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
+    st.caption("※ 下のバー（期間スライダー）をドラッグすると、表示期間を自由に変更できます。")
     st.caption("※ 内訳（銀行/NISA）や目標マーカーは凡例クリックで表示できます。")
 # ==================================================
 # Parameters から「比率セット」を取得する関数
@@ -1549,6 +1599,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
