@@ -785,6 +785,133 @@ def plot_future_simulation_v2(df_sim):
 
     st.plotly_chart(fig, use_container_width=True)
 # ==================================================
+# Parameters から「比率セット」を取得する関数
+# ==================================================
+def get_ideal_nisa_ratios_from_params(df_params, today):
+    """
+    Parameters シートから理想NISA比率（4段階）を取得
+    """
+    def g(name, default):
+        v = get_latest_parameter(df_params, name, today)
+        try:
+            return float(v)
+        except:
+            return default
+
+    return {
+        "safe": g("理想NISA比率_安心", 0.85),
+        "rec": g("理想NISA比率_推奨", 0.70),
+        "min": g("理想NISA比率_最低限", 0.50),
+        "danger": g("理想NISA比率_危険", 0.00),
+    }
+
+# ==================================================
+# 比率決定ロジック
+# ==================================================
+def choose_ideal_nisa_ratio_by_emergency_from_params(
+    safe_cash,
+    ef,
+    ratios: dict
+):
+    """
+    Parameters由来の理想NISA比率を
+    生活防衛費ステータスに応じて返す
+    """
+    if safe_cash is None:
+        return ratios["rec"]
+
+    if safe_cash < ef["fund_min"]:
+        return ratios["danger"]
+    if safe_cash < ef["fund_rec"]:
+        return ratios["min"]
+    if safe_cash < ef["fund_comfort"]:
+        return ratios["rec"]
+    return ratios["safe"]
+# ==================================================
+# 将来シミュレーションを「月ごと比率」に対応させる関数
+# ==================================================
+def simulate_future_paths_v3_dynamic_ratio(
+    today,
+    current_bank,
+    current_nisa,
+    annual_return,
+    inflation_rate,
+    current_age,
+    end_age,
+    target_real_today,
+    ef,
+    # 比率のルール（固定値でもOK）
+    r_safe=0.85, r_rec=0.70, r_min=0.50, r_danger=0.0,
+    bank_min_monthly=0.0,
+):
+    """
+    理想：毎月の必要積立 ideal_pmt は固定（逆算）
+    ただし、配分比率（NISA vs 銀行）を「その月の安全資金（理想銀行）」に応じて動かす
+    """
+    current_bank = float(current_bank)
+    current_nisa = float(current_nisa)
+    annual_return = float(annual_return)
+    inflation_rate = float(inflation_rate)
+    bank_min_monthly = float(bank_min_monthly)
+
+    r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
+    inf_m = (1 + inflation_rate) ** (1 / 12) - 1 if inflation_rate > -1 else 0.0
+
+    months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
+    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
+
+    target_real_curve = [(float(target_real_today) * ((1 + inf_m) ** i)) for i in range(len(dates))]
+    target_real_end = target_real_curve[-1]
+
+    pv_total = current_bank + current_nisa
+    ideal_pmt = solve_required_monthly_pmt(
+        pv=pv_total, fv_target=float(target_real_end), r_month=r, n_months=months_left
+    )
+
+    ideal_bank = current_bank
+    ideal_nisa = current_nisa
+
+    out = []
+    for i, dt in enumerate(dates):
+        ideal_total = ideal_bank + ideal_nisa
+
+        # その月の「安全資金」は理想銀行（＝いつでも引き出せる資金）と解釈
+        safe_cash_sim = ideal_bank
+
+        # 防衛費ステータスに応じて比率を変える
+        ratio = choose_ideal_nisa_ratio_by_emergency_from_params(
+            safe_cash=safe_cash_sim,
+            ef=ef,
+            ratios=ideal_ratios
+        )
+
+        # 銀行最低積立を先に確保（残りを比率配分）
+        bank_first = min(bank_min_monthly, ideal_pmt)
+        remaining = max(ideal_pmt - bank_first, 0.0)
+
+        ideal_bank_add = bank_first + remaining * (1 - ratio)
+        ideal_nisa_add = remaining * ratio
+
+        out.append({
+            "date": dt,
+            "ideal_bank": ideal_bank,
+            "ideal_nisa": ideal_nisa,
+            "ideal_total": ideal_total,
+            "ideal_pmt": ideal_pmt,
+            "ideal_nisa_ratio": ratio,
+            "target_real_nominal": target_real_curve[i],
+            "safe_cash_sim": safe_cash_sim,
+        })
+
+        if i == len(dates) - 1:
+            break
+
+        # 更新：銀行は利回り0、NISAは複利
+        ideal_bank = ideal_bank + ideal_bank_add
+        ideal_nisa = (ideal_nisa + ideal_nisa_add) * (1 + r)
+
+    return pd.DataFrame(out), ideal_pmt, months_left, target_real_end
+# ==================================================
 # UI
 # ==================================================
 def main():
@@ -1009,6 +1136,7 @@ def main():
     # 理想NISA比率（任意）
     ideal_ratio = get_latest_parameter(df_params, "理想NISA比率", today)
     ideal_ratio = None if ideal_ratio is None else to_float_safe(ideal_ratio, default=None)
+    ideal_ratios = get_ideal_nisa_ratios_from_params(df_params, today)
 
     # 現在資産（内訳）
     current_bank = get_latest_bank_balance(df_balance) or 0.0
@@ -1022,19 +1150,20 @@ def main():
     monthly_bank_save_plan = float(bank_save_adjusted)
     monthly_nisa_save_plan = float(adjusted_nisa)
 
-    df_sim, ideal_pmt, months_left, target_real_end = simulate_future_paths_v2(
+    df_sim, ideal_pmt, months_left, target_real_end = simulate_future_paths_v3_dynamic_ratio(
         today=today,
         current_bank=current_bank,
         current_nisa=current_nisa,
-        monthly_bank_save=monthly_bank_save_plan,
-        monthly_nisa_save=monthly_nisa_save_plan,
         annual_return=annual_return,
         inflation_rate=inflation_rate,
         current_age=current_age,
         end_age=end_age,
         target_real_today=target_real_today,
-        ideal_nisa_ratio=ideal_ratio,
+        ef=ef,
+        ideal_ratios=ideal_ratios,      # ← これを追加
+        bank_min_monthly=bank_min_monthly,
     )
+
 
     st.caption(
         f"前提：投資年利 {annual_return*100:.1f}% / インフレ率 {inflation_rate*100:.1f}% / "
@@ -1046,6 +1175,15 @@ def main():
     st.caption(
         f"理想軌道に必要な毎月の積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（理想NISA比率: {int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}%）"
     )
+    st.caption(
+        f"理想NISA比率（開始時点）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% "
+        f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
+    )
+    st.caption(
+        f"理想NISA比率（開始）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% → "
+        f"（終了）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
+    )
+
 
     plot_future_simulation_v2(df_sim)
 
@@ -1054,5 +1192,6 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
