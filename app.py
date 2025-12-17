@@ -1586,14 +1586,6 @@ def main():
 
     # --- スライダーは下、グラフは上に表示される
     with chart_slot:
-        plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
-
-# --- 絞り込み（date列は保持される）
-mask = (df_sim["date"].dt.date >= start_d) & (df_sim["date"].dt.date <= end_d)
-df_sim_view = df_sim.loc[mask].copy()
-
-# --- スライダーは下、グラフは上に表示される
-with chart_slot:
     plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
 
     
@@ -1611,6 +1603,7 @@ with chart_slot:
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
