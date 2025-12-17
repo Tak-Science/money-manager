@@ -784,14 +784,14 @@ def plot_future_simulation_v2(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-def plot_future_simulation_v3(df_sim):
+def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
     if df_sim.empty:
         st.info("シミュレーションに必要なデータが不足しています。")
         return
 
     fig = go.Figure()
 
-    # ✅ 現実（予測）合計：表示
+    # 現実（合計）
     fig.add_trace(go.Scatter(
         x=df_sim["date"],
         y=df_sim["total"],
@@ -808,7 +808,7 @@ def plot_future_simulation_v3(df_sim):
         )
     ))
 
-    # ✅ 理想（合計）：表示
+    # 理想（合計）
     fig.add_trace(go.Scatter(
         x=df_sim["date"],
         y=df_sim["ideal_total"],
@@ -818,7 +818,7 @@ def plot_future_simulation_v3(df_sim):
         hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # ✅ 実質1億（名目目標）：表示
+    # 名目目標カーブ
     fig.add_trace(go.Scatter(
         x=df_sim["date"],
         y=df_sim["target_real_nominal"],
@@ -828,34 +828,71 @@ def plot_future_simulation_v3(df_sim):
         hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # --- 内訳（必要なら凡例クリックで表示）
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["ideal_bank"],
-        mode="lines", name="🏦 理想 銀行",
-        line=dict(dash="dot"),
-        visible="legendonly",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["ideal_nisa"],
-        mode="lines", name="📈 理想 NISA",
-        line=dict(dash="dot"),
-        visible="legendonly",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["bank"],
-        mode="lines", name="🏦 現実 銀行（予測）",
-        line=dict(dash="dot"),
-        visible="legendonly",
-    ))
-    fig.add_trace(go.Scatter(
-        x=df_sim["date"], y=df_sim["nisa"],
-        mode="lines", name="📈 現実 NISA（予測）",
-        line=dict(dash="dot"),
-        visible="legendonly",
-    ))
+    # 内訳（legendonly）
+    for col, nm in [
+        ("ideal_bank", "🏦 理想 銀行"),
+        ("ideal_nisa", "📈 理想 NISA"),
+        ("bank", "🏦 現実 銀行（予測）"),
+        ("nisa", "📈 現実 NISA（予測）"),
+    ]:
+        fig.add_trace(go.Scatter(
+            x=df_sim["date"], y=df_sim[col],
+            mode="lines",
+            name=nm,
+            line=dict(dash="dot"),
+            visible="legendonly"
+        ))
+
+    # ---- Goals 表示（線は増やさずイベントだけ）
+    if show_goals:
+        # 支出（outflow>0）の月に縦線
+        out_df = df_sim[df_sim["outflow"].fillna(0) > 0].copy()
+        out_df = out_df.head(max_goal_marks)  # 多すぎると汚いので上限
+
+        for _, r in out_df.iterrows():
+            x = r["date"]
+            amt = float(r["outflow"])
+            fig.add_vline(
+                x=x,
+                line_dash="dot",
+                line_width=1,
+                opacity=0.6,
+                annotation_text=f"支出 -{int(amt):,}",
+                annotation_position="top left"
+            )
+
+        # 目標（goal_count>0）の期限月に達成/未達マーカー（現実）
+        goal_df = df_sim[df_sim["goal_count"].fillna(0) > 0].copy()
+        goal_df = goal_df.head(max_goal_marks)
+
+        if not goal_df.empty:
+            # 目標が複数ある月もあるので、達成率で色分けしたいところだが、
+            # いったん marker のテキストで表現する（スッキリ重視）
+            goal_df["goal_status"] = goal_df.apply(
+                lambda r: "🟢" if r["goal_achieved_real"] == r["goal_count"] else "🔴",
+                axis=1
+            )
+
+            fig.add_trace(go.Scatter(
+                x=goal_df["date"],
+                y=goal_df["total"],
+                mode="markers",
+                name="🎯 目標チェック（現実）",
+                marker=dict(size=10),
+                text=goal_df["goal_status"],
+                hovertemplate=(
+                    "日付: %{x|%Y-%m}<br>"
+                    "現実 合計: %{y:,.0f} 円<br>"
+                    "目標: %{customdata[0]}<br>"
+                    "達成（現実）: %{customdata[1]}/%{customdata[2]}"
+                    "<extra></extra>"
+                ),
+                customdata=goal_df[["goal_note", "goal_achieved_real", "goal_count"]].values,
+                visible="legendonly"  # 初期は非表示（汚さない）
+            ))
 
     fig.update_layout(
-        title="🔮 将来シミュレーション（現実 vs 理想 + 実質1億）",
+        title="🔮 将来シミュレーション（現実 vs 理想 + 実質1億 + Goals）",
         xaxis_title="日付",
         yaxis_title="金額（円）",
         hovermode="x unified",
@@ -863,7 +900,7 @@ def plot_future_simulation_v3(df_sim):
     )
 
     st.plotly_chart(fig, use_container_width=True)
-    st.caption("※ 内訳（理想/現実の銀行・NISA）は凡例クリックで表示できます。")
+    st.caption("※ 内訳（銀行/NISA）や目標マーカーは凡例クリックで表示できます。")
 # ==================================================
 # Parameters から「比率セット」を取得する関数
 # ==================================================
@@ -915,26 +952,18 @@ def simulate_future_paths_v3_dynamic_ratio(
     today,
     current_bank,
     current_nisa,
-    # 現実（あなたの今月計画）
     monthly_bank_save_plan,
     monthly_nisa_save_plan,
-    # 共通パラメータ
     annual_return,
     inflation_rate,
     current_age,
     end_age,
     target_real_today,
-    # 理想（防衛費連動）
     ef,
     ideal_ratios,
+    df_goals=None,
     bank_min_monthly=0.0,
 ):
-    """
-    df_sim に以下を入れる：
-      - 現実：bank / nisa / total（今月計画を固定で継続）
-      - 理想：ideal_bank / ideal_nisa / ideal_total（比率を防衛費で動的に切替）
-      - 実質1億：target_real_nominal（インフレ込み名目目標カーブ）
-    """
     current_bank = float(current_bank)
     current_nisa = float(current_nisa)
     monthly_bank_save_plan = float(monthly_bank_save_plan)
@@ -943,19 +972,15 @@ def simulate_future_paths_v3_dynamic_ratio(
     inflation_rate = float(inflation_rate)
     bank_min_monthly = float(bank_min_monthly)
 
-    # 月利（投資）
     r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
-    # 月次インフレ率（実質目標曲線用）
     inf_m = (1 + inflation_rate) ** (1 / 12) - 1 if inflation_rate > -1 else 0.0
 
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
-    # 実質1億（今日価値）→ 将来必要な名目目標カーブ
     target_real_curve = [float(target_real_today) * ((1 + inf_m) ** i) for i in range(len(dates))]
     target_real_end = target_real_curve[-1]
 
-    # --- 理想：最終名目目標を達成するための毎月積立（総資産ベース）
     pv_total = current_bank + current_nisa
     ideal_pmt = solve_required_monthly_pmt(
         pv=pv_total,
@@ -964,23 +989,35 @@ def simulate_future_paths_v3_dynamic_ratio(
         n_months=months_left
     )
 
+    # Goals → 月次イベントに変換
+    outflow_by_month, targets_by_month = prepare_goals_events(df_goals, today)
+
     # 現実
     bank = current_bank
     nisa = current_nisa
 
-    # 理想（内訳あり）
+    # 理想
     ideal_bank = current_bank
     ideal_nisa = current_nisa
 
     rows = []
     for i, dt in enumerate(dates):
+        month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
+
+        # ---- 支出イベント（この月）を適用（現実/理想に両方）
+        outflow = float(outflow_by_month.get(month_key, 0.0))
+        used_bank = used_nisa = 0.0
+        used_ideal_bank = used_ideal_nisa = 0.0
+
+        if outflow > 0:
+            bank, nisa, used_bank, used_nisa = apply_outflow_bank_first(bank, nisa, outflow)
+            ideal_bank, ideal_nisa, used_ideal_bank, used_ideal_nisa = apply_outflow_bank_first(ideal_bank, ideal_nisa, outflow)
+
         total = bank + nisa
         ideal_total = ideal_bank + ideal_nisa
 
-        # “引き出し用資金” = 理想銀行 と解釈（比率制御に使う）
+        # ---- 理想比率（防衛費ステータス連動）
         safe_cash_sim = ideal_bank
-
-        # ステータスに応じた比率（Parameters由来）
         ratio = choose_ideal_nisa_ratio_by_emergency_from_params(
             safe_cash=safe_cash_sim,
             ef=ef,
@@ -988,12 +1025,30 @@ def simulate_future_paths_v3_dynamic_ratio(
         )
         ratio = min(max(float(ratio), 0.0), 1.0)
 
-        # 理想：銀行最低積立を優先確保
+        # ---- 理想積立（銀行最低積立を優先）
         bank_first = min(bank_min_monthly, ideal_pmt)
         remaining = max(ideal_pmt - bank_first, 0.0)
-
         ideal_bank_add = bank_first + remaining * (1 - ratio)
         ideal_nisa_add = remaining * ratio
+
+        # ---- 目標チェック（この月）
+        goal_items = targets_by_month.get(month_key, [])
+        # df_simに格納するため、達成状況を簡易集約して入れる（詳細は別テーブルで出す）
+        goal_count = len(goal_items)
+        achieved_real = 0
+        achieved_ideal = 0
+        goal_note = ""
+
+        if goal_count > 0:
+            # 代表1件だけ注釈（多いと汚くなるため）
+            first = goal_items[0]
+            goal_note = f"{first['name']}（{int(first['amount']):,}円）"
+
+            for g in goal_items:
+                if total >= g["amount"]:
+                    achieved_real += 1
+                if ideal_total >= g["amount"]:
+                    achieved_ideal += 1
 
         rows.append({
             "date": dt,
@@ -1011,19 +1066,29 @@ def simulate_future_paths_v3_dynamic_ratio(
             "ideal_pmt": ideal_pmt,
             "ideal_nisa_ratio": ratio,
 
+            # 実質1億（名目目標曲線）
             "target_real_nominal": target_real_curve[i],
-            "safe_cash_sim": safe_cash_sim,
+
+            # Goals
+            "outflow": outflow,
+            "outflow_used_bank": used_bank,
+            "outflow_used_nisa": used_nisa,
+            "goal_count": goal_count,
+            "goal_achieved_real": achieved_real,
+            "goal_achieved_ideal": achieved_ideal,
+            "goal_note": goal_note,
+
             "gap_vs_ideal": total - ideal_total,
         })
 
         if i == len(dates) - 1:
             break
 
-        # --- 次月へ（現実）
+        # 次月へ（現実）
         bank = bank + monthly_bank_save_plan
         nisa = (nisa + monthly_nisa_save_plan) * (1 + r)
 
-        # --- 次月へ（理想）
+        # 次月へ（理想）
         ideal_bank = ideal_bank + ideal_bank_add
         ideal_nisa = (ideal_nisa + ideal_nisa_add) * (1 + r)
 
@@ -1062,6 +1127,100 @@ def estimate_realistic_monthly_contribution(df_balance, months=6):
 
     # “積立っぽい増分”なのでマイナスは0扱い（保守的）
     return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+# ==================================================
+# Goals をイベント化する関数
+# ==================================================
+def convert_to_jpy_stub(amount, currency, date=None):
+    """
+    いったん JPY のみ対応（将来FX対応するための土台）。
+    他通貨が来たら一旦そのまま返す（必要なら st.warning に変更）。
+    """
+    try:
+        a = float(amount)
+    except:
+        return None
+
+    c = str(currency).strip().upper() if currency is not None else "JPY"
+    if c == "JPY" or c == "":
+        return a
+
+    # TODO: 将来、ここに為替変換を入れる
+    return a
+
+
+def prepare_goals_events(df_goals, today):
+    """
+    Goals シートから「月次イベント」に整形して返す。
+    - 支出: monthに合計して outflow_by_month[month] = amount
+    - 目標: その月にチェックする target_by_month[month] = list of targets
+    """
+    if df_goals is None or df_goals.empty:
+        return {}, {}
+
+    df = df_goals.copy()
+
+    # 列の存在チェック（足りない場合は空で返す）
+    required = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
+    for col in required:
+        if col not in df.columns:
+            return {}, {}
+
+    df["達成期限"] = pd.to_datetime(df["達成期限"], errors="coerce")
+    df = df.dropna(subset=["達成期限"])
+    if df.empty:
+        return {}, {}
+
+    # 未来だけに絞る（過去イベントを含めたいならここを外す）
+    df = df[df["達成期限"] >= pd.to_datetime(today).normalize()]
+
+    # month key
+    df["month"] = df["達成期限"].dt.to_period("M").astype(str)
+
+    outflow_by_month = {}   # 支出：月→合計支出（JPY）
+    targets_by_month = {}   # 目標：月→list
+
+    for _, r in df.iterrows():
+        name = str(r["目標名"])
+        typ = str(r["タイプ"]).strip()
+        prio = str(r["優先度"]).strip()
+        m = str(r["month"])
+
+        amt = convert_to_jpy_stub(r["金額"], r["通貨"], r["達成期限"])
+        if amt is None:
+            continue
+
+        if typ == "支出":
+            outflow_by_month[m] = outflow_by_month.get(m, 0.0) + float(amt)
+        else:
+            # typ == "目標" を想定（それ以外も目標扱い）
+            targets_by_month.setdefault(m, []).append({
+                "name": name,
+                "amount": float(amt),
+                "priority": prio,
+                "deadline": r["達成期限"]
+            })
+
+    return outflow_by_month, targets_by_month
+# ==================================================
+# 「銀行→不足ならNISA」順で支出を引く関数
+# ==================================================
+def apply_outflow_bank_first(bank, nisa, outflow):
+    """
+    支出を銀行→NISAの順で差し引く。
+    戻り値: new_bank, new_nisa, used_bank, used_nisa
+    """
+    bank = float(bank)
+    nisa = float(nisa)
+    outflow = float(outflow)
+
+    use_bank = min(bank, outflow)
+    bank -= use_bank
+    remain = outflow - use_bank
+
+    use_nisa = min(nisa, remain)
+    nisa -= use_nisa
+
+    return bank, nisa, use_bank, use_nisa
 # ==================================================
 # UI
 # ==================================================
@@ -1335,6 +1494,7 @@ def main():
 
         ef=ef,
         ideal_ratios=ideal_ratios,
+        df_goals=df_goals,
         bank_min_monthly=bank_min_monthly,
     )
 
@@ -1354,17 +1514,19 @@ def main():
         f"理想NISA比率（開始時点）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% "
         f"→（終了時点）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
     )
-    st.caption(
-        f"理想NISA比率（開始）：{int(df_sim['ideal_nisa_ratio'].iloc[0]*100)}% → "
-        f"（終了）：{int(df_sim['ideal_nisa_ratio'].iloc[-1]*100)}%"
-    )
-
 
     plot_future_simulation_v3(df_sim)
-
+    with st.expander("🎯 Goals（期限月ごとの達成状況）を見る"):
+    view = df_sim[df_sim["goal_count"] > 0][
+        ["date", "total", "ideal_total", "goal_count", "goal_achieved_real", "goal_achieved_ideal", "goal_note"]
+    ].copy()
+    if view.empty:
+        st.info("目標イベントはまだありません。")
+    else:
+        view["date"] = view["date"].dt.strftime("%Y-%m")
+        st.dataframe(view, use_container_width=True)
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
-
