@@ -850,7 +850,9 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
         out_df = out_df.head(max_goal_marks)  # 多すぎると汚いので上限
 
         for _, r in out_df.iterrows():
-            x = r["date"]
+            # ★ pandas.Timestamp → python datetime に変換（Plotlyのadd_vlineが落ちない）
+            x = pd.to_datetime(r["date"]).to_pydatetime()
+
             amt = float(r["outflow"])
             fig.add_vline(
                 x=x,
@@ -858,8 +860,9 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12):
                 line_width=1,
                 opacity=0.6,
                 annotation_text=f"支出 -{int(amt):,}",
-                annotation_position="top left"
-            )
+                annotation_position="top left",
+           )
+
 
         # 目標（goal_count>0）の期限月に達成/未達マーカー（現実）
         goal_df = df_sim[df_sim["goal_count"].fillna(0) > 0].copy()
@@ -1540,4 +1543,5 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
