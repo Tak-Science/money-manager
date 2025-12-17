@@ -998,7 +998,7 @@ def choose_ideal_nisa_ratio_by_emergency_from_params(
 # ==================================================
 # 将来シミュレーションを「月ごと比率」に対応させる関数
 # ==================================================
-def simulate_future_paths_v3_dynamic_ratio(
+def simulate_future_goal_note = f"{first['name']}（{int(first['amount']):,}円）"_dynamic_ratio(
     *,
     today,
     current_bank,
@@ -1040,8 +1040,8 @@ def simulate_future_paths_v3_dynamic_ratio(
         n_months=months_left
     )
 
-    # Goals → 月次イベントに変換
-    outflow_by_month, targets_by_month = prepare_goals_events(df_goals, today)
+    # Goals → 月次イベントに変換（支出は list 化）
+    outflows_by_month, targets_by_month = prepare_goals_events(df_goals, today)
 
     # 現実
     bank = current_bank
@@ -1056,7 +1056,14 @@ def simulate_future_paths_v3_dynamic_ratio(
         month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
 
         # ---- 支出イベント（この月）を適用（現実/理想に両方）
-        outflow = float(outflow_by_month.get(month_key, 0.0))
+        items = outflows_by_month.get(month_key, [])
+        outflow = float(sum(x["amount"] for x in items)) if items else 0.0
+
+        outflow_name = ""
+        if items:
+            names = [x["name"] for x in items]
+            outflow_name = " / ".join(names[:3]) + (" …" if len(names) > 3 else "")
+
         used_bank = used_nisa = 0.0
         used_ideal_bank = used_ideal_nisa = 0.0
 
@@ -1097,6 +1104,12 @@ def simulate_future_paths_v3_dynamic_ratio(
             # 代表1件だけ注釈（多いと汚くなるため）
             first = goal_items[0]
             goal_note = f"{first['name']}（{int(first['amount']):,}円）"
+            goal_name = ""
+            if goal_count > 0:
+                first = goal_items[0]
+                goal_name = first["name"]
+                goal_note = f"{first['name']}（{int(first['amount']):,}円）"
+
 
             for g in goal_items:
                 if total >= g["amount"]:
@@ -1136,7 +1149,9 @@ def simulate_future_paths_v3_dynamic_ratio(
             "outflow_unpaid_real": unpaid_real,
             "outflow_unpaid_ideal": unpaid_ideal,
             "outflow_ok_real": (unpaid_real <= 0),
-             "outflow_ok_ideal": (unpaid_ideal <= 0),
+            "outflow_ok_ideal": (unpaid_ideal <= 0),
+            "goal_name": goal_name,
+            "outflow_name": outflow_name,
         })
 
         if i == len(dates) - 1:
@@ -1248,17 +1263,21 @@ def prepare_goals_events(df_goals, today):
             continue
 
         if typ == "支出":
-            outflow_by_month[m] = outflow_by_month.get(m, 0.0) + float(amt)
+            outflows_by_month.setdefault(m, []).append({
+                "name": name,
+                "amount": float(amt),
+                "priority": prio,
+                "deadline": r["達成期限"],
+            })
         else:
-            # typ == "目標" を想定（それ以外も目標扱い）
             targets_by_month.setdefault(m, []).append({
                 "name": name,
                 "amount": float(amt),
                 "priority": prio,
-                "deadline": r["達成期限"]
+                "deadline": r["達成期限"],
             })
 
-    return outflow_by_month, targets_by_month
+        return outflows_by_month, targets_by_month
 # ==================================================
 # 「銀行→不足ならNISA」順で支出を引く関数
 # ==================================================
@@ -1637,6 +1656,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
