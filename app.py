@@ -599,6 +599,148 @@ def plot_asset_trend(df_balance, ef):
 
     st.plotly_chart(fig, use_container_width=True)
 # ==================================================
+# 将来シミュレーション関数
+# ==================================================
+def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
+    """FVを満たすための毎月積立PMTを逆算（複利）"""
+    pv = float(pv)
+    fv_target = float(fv_target)
+    n = int(max(n_months, 1))
+
+    if r_month <= 0:
+        # 利回りゼロのとき
+        return max((fv_target - pv) / n, 0.0)
+
+    a = (1 + r_month) ** n
+    denom = (a - 1) / r_month
+    pmt = (fv_target - pv * a) / denom
+    return max(float(pmt), 0.0)
+
+
+def simulate_future_paths(
+    today,
+    current_bank,
+    current_nisa,
+    monthly_bank_save,
+    monthly_nisa_save,
+    annual_return,
+    current_age,
+    end_age,
+    target_total=100_000_000
+):
+    """
+    現実パス：銀行は増えるだけ（利回り0）、NISAは複利で増える
+    理想パス：総資産（銀行+NISA相当）に年利をかけて、目標達成に必要なPMTを逆算
+    """
+    current_bank = float(current_bank)
+    current_nisa = float(current_nisa)
+    monthly_bank_save = float(monthly_bank_save)
+    monthly_nisa_save = float(monthly_nisa_save)
+    annual_return = float(annual_return)
+
+    # 月利
+    r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
+
+    months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
+
+    # 現在の総資産
+    pv_total = current_bank + current_nisa
+
+    # 理想：目標に必要な「毎月の追加資金（総資産に積むイメージ）」を逆算
+    ideal_pmt = solve_required_monthly_pmt(
+        pv=pv_total,
+        fv_target=float(target_total),
+        r_month=r,
+        n_months=months_left
+    )
+
+    # シミュレーション（当月を0として months_left+1 点）
+    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
+    out = []
+
+    bank = current_bank
+    nisa = current_nisa
+
+    # 理想側：総資産を1本で扱う（投資されて増える前提）
+    ideal_total = pv_total
+
+    for i, dt in enumerate(dates):
+        total = bank + nisa
+        out.append({
+            "date": dt,
+            "bank": bank,
+            "nisa": nisa,
+            "total": total,
+            "ideal_total": ideal_total,
+            "gap_vs_ideal": total - ideal_total,  # 現実 - 理想（マイナスなら遅れ）
+            "ideal_pmt": ideal_pmt
+        })
+
+        # 次月へ（最後は更新不要）
+        if i == len(dates) - 1:
+            break
+
+        # 現実パス：積立 → NISA複利
+        bank = bank + monthly_bank_save
+        nisa = (nisa + monthly_nisa_save) * (1 + r)
+
+        # 理想パス：毎月 ideal_pmt を積立 → 複利
+        ideal_total = (ideal_total + ideal_pmt) * (1 + r)
+
+    return pd.DataFrame(out), ideal_pmt, months_left
+
+
+def plot_future_simulation(df_sim, target_total):
+    if df_sim.empty:
+        st.info("シミュレーションに必要なデータが不足しています。")
+        return
+
+    fig = go.Figure()
+
+    # 現実（予測）：合計資産
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"],
+        y=df_sim["total"],
+        mode="lines",
+        name="💰 予測（現実）合計資産",
+        customdata=df_sim[["ideal_total", "gap_vs_ideal"]].values,
+        hovertemplate=(
+            "日付: %{x|%Y-%m}<br>"
+            "現実（予測）: %{y:,.0f} 円<br>"
+            "理想: %{customdata[0]:,.0f} 円<br>"
+            "差分（現実-理想）: %{customdata[1]:,.0f} 円"
+            "<extra></extra>"
+        )
+    ))
+
+    # 理想軌道
+    fig.add_trace(go.Scatter(
+        x=df_sim["date"],
+        y=df_sim["ideal_total"],
+        mode="lines",
+        name="🎯 理想軌道（1億円ペース）",
+        line=dict(dash="dash"),
+        hovertemplate="日付: %{x|%Y-%m}<br>理想: %{y:,.0f} 円<extra></extra>"
+    ))
+
+    # 目標ライン（1億円）
+    fig.add_hline(
+        y=float(target_total),
+        line_dash="dot",
+        annotation_text="🏁 目標：1億円",
+        annotation_position="top left"
+    )
+
+    fig.update_layout(
+        title="🔮 将来シミュレーション（理想軌道 vs 現実予測）",
+        xaxis_title="日付",
+        yaxis_title="金額（円）",
+        hovermode="x unified",
+        height=520
+    )
+
+    st.plotly_chart(fig, use_container_width=True)
+# ==================================================
 # UI
 # ==================================================
 def main():
@@ -806,8 +948,53 @@ def main():
     # ==========================================
     st.subheader("📊 資産推移")
     plot_asset_trend(df_balance, ef)
+    # ==========================================
+    # 将来シミュレーション（1億円ロードマップ）
+    # ==========================================
+    st.subheader("🔮 将来シミュレーション（1億円ロードマップ）")
+
+    # Parameters から取得（無ければデフォルト）
+    target_total = to_float_safe(get_latest_parameter(df_params, "目標資産額", today), default=100_000_000.0)
+    annual_return = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
+    end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
+    current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
+
+    # 現在資産の内訳
+    current_bank = get_latest_bank_balance(df_balance) or 0.0
+    current_nisa = 0.0
+    if not df_balance.empty and {"日付", "NISA評価額"}.issubset(df_balance.columns):
+        dtmp = df_balance.dropna(subset=["日付"]).sort_values("日付")
+        if not dtmp.empty:
+            current_nisa = float(pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce") or 0.0)
+
+    # 「今月の計画」を今後も固定で続ける前提（まずはv1）
+    monthly_bank_save_plan = float(bank_save_adjusted)
+    monthly_nisa_save_plan = float(adjusted_nisa)
+
+    df_sim, ideal_pmt, months_left = simulate_future_paths(
+        today=today,
+        current_bank=current_bank,
+        current_nisa=current_nisa,
+        monthly_bank_save=monthly_bank_save_plan,
+        monthly_nisa_save=monthly_nisa_save_plan,
+        annual_return=annual_return,
+        current_age=current_age,
+        end_age=end_age,
+        target_total=target_total
+    )
+
+    # 上にサマリ表示（毎月いくら必要か）
+    st.caption(
+        f"前提：投資年利 {annual_return*100:.1f}% / 現在年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
+    )
+    st.caption(f"理想軌道に必要な毎月の積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（総資産ベース・複利）")
+
+    # グラフ
+    plot_future_simulation(df_sim, target_total)
+
 # ==================================================
 # 実行
 # ==================================================
 if __name__ == "__main__":
     main()
+
