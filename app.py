@@ -57,15 +57,12 @@ def load_data():
 
 
 # ==================================================
-# 前処理（最低限：型だけ整える）
+# 前処理（型だけ整える）
 # ==================================================
 def preprocess_data(df_params, df_fix, df_forms, df_balance):
-    # Parameters
-    if not df_params.empty:
-        if "適用開始日" in df_params.columns:
-            df_params["適用開始日"] = pd.to_datetime(df_params["適用開始日"], errors="coerce")
+    if not df_params.empty and "適用開始日" in df_params.columns:
+        df_params["適用開始日"] = pd.to_datetime(df_params["適用開始日"], errors="coerce")
 
-    # Fix_Cost
     if not df_fix.empty:
         if "開始日" in df_fix.columns:
             df_fix["開始日"] = pd.to_datetime(df_fix["開始日"], errors="coerce")
@@ -76,7 +73,6 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance):
         if "サイクル" in df_fix.columns:
             df_fix["サイクル"] = df_fix["サイクル"].fillna("毎月")
 
-    # Forms_Log
     if not df_forms.empty:
         if "日付" in df_forms.columns:
             df_forms["日付"] = pd.to_datetime(df_forms["日付"], errors="coerce")
@@ -85,7 +81,6 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance):
         if "満足度" in df_forms.columns:
             df_forms["満足度"] = pd.to_numeric(df_forms["満足度"], errors="coerce")
 
-    # Balance_Log
     if not df_balance.empty:
         if "日付" in df_balance.columns:
             df_balance["日付"] = pd.to_datetime(df_balance["日付"], errors="coerce")
@@ -103,7 +98,7 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance):
 def get_latest_parameter(df, item, target_date):
     if df.empty:
         return None
-    if "項目" not in df.columns or "値" not in df.columns or "適用開始日" not in df.columns:
+    if not {"項目", "値", "適用開始日"}.issubset(set(df.columns)):
         return None
 
     d = df.copy()
@@ -168,7 +163,9 @@ def calculate_monthly_variable_cost(df_forms, today):
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
 
-    return float(d[(d["month"] == current_month) & (d["費目"].isin(EXPENSE_CATEGORIES))]["金額"].sum())
+    return float(
+        d[(d["month"] == current_month) & (d["費目"].isin(EXPENSE_CATEGORIES))]["金額"].sum()
+    )
 
 
 def calculate_monthly_variable_income(df_forms, today):
@@ -181,7 +178,9 @@ def calculate_monthly_variable_income(df_forms, today):
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
 
-    return float(d[(d["month"] == current_month) & (d["費目"].isin(INCOME_CATEGORIES))]["金額"].sum())
+    return float(
+        d[(d["month"] == current_month) & (d["費目"].isin(INCOME_CATEGORIES))]["金額"].sum()
+    )
 
 
 # ==================================================
@@ -212,6 +211,16 @@ def get_latest_total_asset(df_balance):
     return float(d.iloc[-1]["銀行残高"] + d.iloc[-1]["NISA評価額"])
 
 
+def get_latest_nisa_value(df_balance):
+    if df_balance.empty or not {"日付", "NISA評価額"}.issubset(set(df_balance.columns)):
+        return 0.0
+    d = df_balance.dropna(subset=["日付"]).sort_values("日付")
+    if d.empty:
+        return 0.0
+    v = pd.to_numeric(d.iloc[-1]["NISA評価額"], errors="coerce")
+    return 0.0 if pd.isna(v) else float(v)
+
+
 # ==================================================
 # NISA 積立計算（モード A/B/C）
 # ==================================================
@@ -221,11 +230,17 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
 
     min_nisa = to_float_safe(get_latest_parameter(df_params, "NISA最低積立額", today), default=0.0)
     max_nisa = to_float_safe(get_latest_parameter(df_params, "NISA最大積立額", today), default=0.0)
-    target_asset = to_float_safe(get_latest_parameter(df_params, "目標資産額", today), default=100_000_000.0)
-    retire_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
 
-    # Profile未導入なので仮（将来profileで置換）
-    current_age = 20.0
+    # 互換：昔の「目標資産額」系は残しておく（Bで使う）
+    target_asset = to_float_safe(get_latest_parameter(df_params, "目標資産額", today), default=100_000_000.0)
+
+    # 「働く最長年齢」（未設定なら60、互換で老後年齢も参照）
+    end_age = get_latest_parameter(df_params, "働く最長年齢", today)
+    if end_age is None:
+        end_age = get_latest_parameter(df_params, "老後年齢", today)
+    end_age = to_float_safe(end_age, default=60.0)
+
+    current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
 
     if max_nisa <= 0:
         max_nisa = float(available_cash)
@@ -233,7 +248,7 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     if mode == "A":
         nisa = min_nisa
     elif mode == "B":
-        years_left = max(retire_age - current_age, 1)
+        years_left = max(end_age - current_age, 1)
         months_left = years_left * 12
         ideal = (target_asset - current_asset) / months_left
         nisa = max(min(ideal, max_nisa), min_nisa)
@@ -266,7 +281,7 @@ def analyze_deficit(monthly_income, fix_cost, variable_cost):
 
 
 # ==================================================
-# メモ頻出分析（強化版）
+# メモ頻出分析
 # ==================================================
 def analyze_memo_frequency_advanced(df_forms, today, is_deficit, variable_cost, monthly_income, top_n=5):
     variable_expected = monthly_income * 0.3
@@ -326,7 +341,7 @@ def analyze_memo_by_category(df_forms, today, is_deficit, variable_cost, monthly
 
 
 # ==================================================
-# 最近増えている費目（直近月 vs 過去3か月平均）
+# 最近増えている費目
 # ==================================================
 def analyze_category_trend_3m(df_forms, today):
     if df_forms.empty or not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
@@ -373,7 +388,7 @@ def analyze_category_trend_3m(df_forms, today):
 
 
 # ==================================================
-# 生活防衛費（月次シリーズ作成）
+# 生活防衛費（月次シリーズ）
 # ==================================================
 def build_month_list(today, months_back=12):
     end = pd.Period(today.strftime("%Y-%m"), freq="M")
@@ -387,9 +402,7 @@ def monthly_variable_cost_series(df_forms, months):
     d = df_forms.copy()
     d = d[d["費目"].isin(EXPENSE_CATEGORIES)]
     d["month"] = d["日付"].dt.to_period("M").astype(str)
-
-    s = d.groupby("month")["金額"].sum().reindex(months, fill_value=0.0).astype(float)
-    return s
+    return d.groupby("month")["金額"].sum().reindex(months, fill_value=0.0).astype(float)
 
 
 def monthly_fix_cost_series(df_fix, months):
@@ -417,7 +430,6 @@ def monthly_fix_cost_series(df_fix, months):
             lambda r: r["金額"] if "毎月" in str(r["サイクル"]) else (r["金額"] / 12.0 if "毎年" in str(r["サイクル"]) else r["金額"]),
             axis=1
         )
-
         out[m] = float(active["monthly_amount"].sum())
 
     return out
@@ -474,13 +486,10 @@ def estimate_emergency_fund(df_params, df_fix, df_forms, today):
 def adjust_nisa_by_emergency_status(nisa_amount, safe_cash, ef):
     if safe_cash is None:
         return float(nisa_amount), "銀行残高が未取得のため調整なし"
-
     if safe_cash < ef["fund_min"]:
         return 0.0, "危険ゾーン：NISA停止"
-
     if safe_cash < ef["fund_rec"]:
         return float(int(nisa_amount * 0.5)), "最低限ゾーン：NISA 50%抑制"
-
     return float(nisa_amount), "推奨以上：抑制なし"
 
 
@@ -496,7 +505,6 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     variable_cost = calculate_monthly_variable_cost(df_forms, today)
 
     available_cash = max(monthly_income - fix_cost - variable_cost, 0.0)
-
     current_asset = get_latest_total_asset(df_balance)
 
     nisa_amount, nisa_mode = calculate_nisa_amount(df_params, today, available_cash, current_asset)
@@ -518,22 +526,38 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
 
 
 # ==================================================
+# FI（必要資産）計算
+# ==================================================
+def get_fi_settings(df_params, today):
+    # 月40万を基準（あなたの方針）
+    fi_monthly = to_float_safe(get_latest_parameter(df_params, "FI月生活費（基準）", today), default=400_000.0)
+
+    # 安全寄り（あなたの方針）→デフォルト3%
+    swr = to_float_safe(get_latest_parameter(df_params, "安全取り崩し率", today), default=0.03)
+    swr = min(max(float(swr), 0.005), 0.10)  # 暴走防止
+
+    fi_required = (fi_monthly * 12.0) / swr
+    return {
+        "fi_monthly": float(fi_monthly),
+        "swr": float(swr),
+        "fi_required": float(fi_required),
+    }
+
+
+# ==================================================
 # 資産推移グラフ
 # ==================================================
 def plot_asset_trend(df_balance, ef):
     if df_balance.empty:
         st.info("Balance_Log にデータがないため、資産推移を表示できません。")
         return
-
     required_cols = {"日付", "銀行残高", "NISA評価額"}
     if not required_cols.issubset(set(df_balance.columns)):
         st.info("Balance_Log の列が不足しています。")
         return
 
     df = df_balance.copy()
-    df = df.dropna(subset=["日付"])
-    df = df.sort_values("日付")
-
+    df = df.dropna(subset=["日付"]).sort_values("日付")
     df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce").fillna(0)
     df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce").fillna(0)
     df["合計資産"] = df["銀行残高"] + df["NISA評価額"]
@@ -557,40 +581,28 @@ def plot_asset_trend(df_balance, ef):
 
 
 # ==================================================
-# 将来シミュレーション：共通関数
+# 将来シミュレーション：共通
 # ==================================================
-def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
-    pv = float(pv)
-    fv_target = float(fv_target)
-    n = int(max(n_months, 1))
+def apply_outflow_bank_first(bank, nisa, outflow):
+    bank = float(bank); nisa = float(nisa); outflow = float(outflow)
+    used_bank = min(bank, outflow)
+    bank -= used_bank
+    remain = outflow - used_bank
+    used_nisa = min(nisa, remain)
+    nisa -= used_nisa
+    unpaid = remain - used_nisa
+    return bank, nisa, used_bank, used_nisa, unpaid
 
+
+def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
+    pv = float(pv); fv_target = float(fv_target)
+    n = int(max(n_months, 1))
     if r_month <= 0:
         return max((fv_target - pv) / n, 0.0)
-
     a = (1 + r_month) ** n
     denom = (a - 1) / r_month
     pmt = (fv_target - pv * a) / denom
     return max(float(pmt), 0.0)
-
-
-def apply_outflow_bank_first(bank, nisa, outflow):
-    """
-    支出を「銀行→NISA」の順で支払う。
-    戻り値：bank, nisa, used_bank, used_nisa, unpaid
-    """
-    bank = float(bank)
-    nisa = float(nisa)
-    outflow = float(outflow)
-
-    used_bank = min(bank, outflow)
-    bank -= used_bank
-    remain = outflow - used_bank
-
-    used_nisa = min(nisa, remain)
-    nisa -= used_nisa
-
-    unpaid = remain - used_nisa
-    return bank, nisa, used_bank, used_nisa, unpaid
 
 
 # ==================================================
@@ -601,13 +613,10 @@ def convert_to_jpy_stub(amount, currency, date=None):
         a = float(amount)
     except:
         return None
-
     c = str(currency).strip().upper() if currency is not None else "JPY"
     if c == "JPY" or c == "":
         return a
-
-    # TODO: 将来、ここに為替変換を入れる
-    return a
+    return a  # TODO: FX
 
 
 def prepare_goals_events(df_goals, today):
@@ -615,7 +624,6 @@ def prepare_goals_events(df_goals, today):
         return {}, {}
 
     df = df_goals.copy()
-
     required = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
     for col in required:
         if col not in df.columns:
@@ -642,13 +650,7 @@ def prepare_goals_events(df_goals, today):
         if amt is None:
             continue
 
-        item = {
-            "name": name,
-            "amount": float(amt),
-            "priority": prio,
-            "deadline": r["達成期限"],
-        }
-
+        item = {"name": name, "amount": float(amt), "priority": prio, "deadline": r["達成期限"]}
         if typ == "支出":
             outflows_by_month.setdefault(m, []).append(item)
         else:
@@ -667,7 +669,6 @@ def get_ideal_nisa_ratios_from_params(df_params, today):
             return float(v)
         except:
             return default
-
     return {
         "safe": g("理想NISA比率_安心", 0.85),
         "rec": g("理想NISA比率_推奨", 0.70),
@@ -689,9 +690,9 @@ def choose_ideal_nisa_ratio_by_emergency_from_params(safe_cash, ef, ratios: dict
 
 
 # ==================================================
-# 将来シミュレーション（v3：月ごと比率＋Goals）
+# 将来シミュレーション（FI目標：v4）
 # ==================================================
-def simulate_future_paths_v3_dynamic_ratio(
+def simulate_future_paths_v4_fi(
     *,
     today,
     current_bank,
@@ -699,12 +700,11 @@ def simulate_future_paths_v3_dynamic_ratio(
     monthly_bank_save_plan,
     monthly_nisa_save_plan,
     annual_return,
-    inflation_rate,
     current_age,
     end_age,
-    target_real_today,
     ef,
     ideal_ratios,
+    fi_required_asset,
     df_goals=None,
     bank_min_monthly=0.0,
 ):
@@ -713,27 +713,23 @@ def simulate_future_paths_v3_dynamic_ratio(
     monthly_bank_save_plan = float(monthly_bank_save_plan)
     monthly_nisa_save_plan = float(monthly_nisa_save_plan)
     annual_return = float(annual_return)
-    inflation_rate = float(inflation_rate)
     bank_min_monthly = float(bank_min_monthly)
 
     r = (1 + annual_return) ** (1 / 12) - 1 if annual_return > -1 else 0.0
-    inf_m = (1 + inflation_rate) ** (1 / 12) - 1 if inflation_rate > -1 else 0.0
 
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
-    target_real_curve = [float(target_real_today) * ((1 + inf_m) ** i) for i in range(len(dates))]
-    target_real_end = target_real_curve[-1]
-
     pv_total = current_bank + current_nisa
+
+    # 理想：最終時点で「FI必要資産」を満たすための毎月積立（逆算）
     ideal_pmt = solve_required_monthly_pmt(
         pv=pv_total,
-        fv_target=float(target_real_end),
+        fv_target=float(fi_required_asset),
         r_month=r,
         n_months=months_left
     )
 
-    # ✅ 統一（超重要）
     outflows_by_month, targets_by_month = prepare_goals_events(df_goals, today)
 
     bank = current_bank
@@ -745,9 +741,7 @@ def simulate_future_paths_v3_dynamic_ratio(
     for i, dt in enumerate(dates):
         month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
 
-        # -------------------------
         # 支出イベント
-        # -------------------------
         items = outflows_by_month.get(month_key, [])
         outflow = float(sum(x["amount"] for x in items)) if items else 0.0
 
@@ -769,28 +763,18 @@ def simulate_future_paths_v3_dynamic_ratio(
         total = bank + nisa
         ideal_total = ideal_bank + ideal_nisa
 
-        # -------------------------
         # 理想比率（防衛費ステータス連動）
-        # -------------------------
         safe_cash_sim = ideal_bank
-        ratio = choose_ideal_nisa_ratio_by_emergency_from_params(
-            safe_cash=safe_cash_sim,
-            ef=ef,
-            ratios=ideal_ratios
-        )
+        ratio = choose_ideal_nisa_ratio_by_emergency_from_params(safe_cash_sim, ef, ideal_ratios)
         ratio = min(max(float(ratio), 0.0), 1.0)
 
-        # -------------------------
         # 理想積立（銀行最低積立を優先）
-        # -------------------------
         bank_first = min(bank_min_monthly, ideal_pmt)
         remaining = max(ideal_pmt - bank_first, 0.0)
         ideal_bank_add = bank_first + remaining * (1 - ratio)
         ideal_nisa_add = remaining * ratio
 
-        # -------------------------
-        # 目標チェック（この月）
-        # -------------------------
+        # 目標チェック
         goal_items = targets_by_month.get(month_key, [])
         goal_count = len(goal_items)
         achieved_real = 0
@@ -802,7 +786,6 @@ def simulate_future_paths_v3_dynamic_ratio(
             first = goal_items[0]
             goal_name = str(first.get("name", ""))
             goal_note = f"{goal_name}（{int(first['amount']):,}円）"
-
             for g in goal_items:
                 if total >= g["amount"]:
                     achieved_real += 1
@@ -823,8 +806,12 @@ def simulate_future_paths_v3_dynamic_ratio(
             "ideal_pmt": ideal_pmt,
             "ideal_nisa_ratio": ratio,
 
-            "target_real_nominal": target_real_curve[i],
+            # FI
+            "fi_required": float(fi_required_asset),
+            "fi_achieved_real": (total >= float(fi_required_asset)),
+            "fi_achieved_ideal": (ideal_total >= float(fi_required_asset)),
 
+            # Goals
             "outflow": outflow,
             "outflow_name": outflow_name,
             "outflow_used_bank": used_bank,
@@ -855,13 +842,25 @@ def simulate_future_paths_v3_dynamic_ratio(
         ideal_nisa = (ideal_nisa + ideal_nisa_add) * (1 + r)
 
     df_sim = pd.DataFrame(rows)
-    return df_sim, ideal_pmt, months_left, target_real_end
+    return df_sim, ideal_pmt, months_left
+
+
+def find_first_achieved_month(df_sim, col_bool="fi_achieved_real"):
+    if df_sim is None or df_sim.empty or col_bool not in df_sim.columns:
+        return None
+    d = df_sim.copy()
+    d["date"] = pd.to_datetime(d["date"], errors="coerce")
+    d = d.dropna(subset=["date"]).sort_values("date")
+    hit = d[d[col_bool] == True]
+    if hit.empty:
+        return None
+    return hit.iloc[0]["date"]
 
 
 # ==================================================
-# グラフ描画（v3）
+# グラフ描画（FI版）
 # ==================================================
-def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_key="future_sim"):
+def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_key="future_sim"):
     if df_sim is None or df_sim.empty:
         st.info("シミュレーションに必要なデータが不足しています。")
         return
@@ -872,51 +871,68 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_
 
     fig = go.Figure()
 
+    # 現実（合計）
     fig.add_trace(go.Scatter(
-        x=df["date"],
-        y=df["total"],
+        x=df["date"], y=df["total"],
         mode="lines",
         name="💰 予測（現実）合計資産",
-        customdata=df[["ideal_total", "gap_vs_ideal", "target_real_nominal"]].values,
+        customdata=df[["ideal_total", "gap_vs_ideal", "fi_required"]].values,
         hovertemplate=(
             "日付: %{x|%Y-%m}<br>"
-            "現実（予測）合計: %{y:,.0f} 円<br>"
+            "現実 合計: %{y:,.0f} 円<br>"
             "理想 合計: %{customdata[0]:,.0f} 円<br>"
             "差分（現実-理想）: %{customdata[1]:,.0f} 円<br>"
-            "実質1億(今日価値)の名目目標: %{customdata[2]:,.0f} 円"
+            "FI必要資産: %{customdata[2]:,.0f} 円"
             "<extra></extra>"
         )
     ))
 
+    # 理想（合計）※初期は非表示（ごちゃつき防止）
     fig.add_trace(go.Scatter(
-        x=df["date"],
-        y=df["ideal_total"],
+        x=df["date"], y=df["ideal_total"],
         mode="lines",
-        name="🎯 理想 合計（実質1億ペース）",
+        name="🎯 理想 合計（FI達成ペース）",
         line=dict(dash="dash"),
+        visible="legendonly",
         hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    fig.add_trace(go.Scatter(
-        x=df["date"],
-        y=df["target_real_nominal"],
-        mode="lines",
-        name="🏁 実質1億(今日価値)の名目目標",
-        line=dict(dash="dashdot"),
-        hovertemplate="日付: %{x|%Y-%m}<br>名目目標: %{y:,.0f} 円<extra></extra>"
-    ))
+    # FIライン（水平線）
+    fi_required = float(df["fi_required"].iloc[0]) if "fi_required" in df.columns else None
+    if fi_required is not None:
+        fig.add_hline(
+            y=fi_required,
+            line_dash="dash",
+            annotation_text="🏁 FIライン（必要資産）",
+            annotation_position="top left",
+        )
+
+    # FI達成月（現実）を1点だけマーク（ごちゃつかない）
+    achieved_dt = find_first_achieved_month(df, "fi_achieved_real")
+    if achieved_dt is not None:
+        # その月の値を取る
+        tmp = df[df["date"] == achieved_dt]
+        if not tmp.empty:
+            y = float(tmp.iloc[0]["total"])
+            fig.add_trace(go.Scatter(
+                x=[achieved_dt],
+                y=[y],
+                mode="markers",
+                name="✅ FI達成（月）",
+                marker=dict(size=10),
+                hovertemplate="FI達成: %{x|%Y-%m}<br>合計資産: %{y:,.0f} 円<extra></extra>",
+            ))
 
     # 内訳（初期はlegendonly）
     for col, nm in [
-        ("ideal_bank", "🏦 理想 銀行"),
-        ("ideal_nisa", "📈 理想 NISA"),
         ("bank", "🏦 現実 銀行（予測）"),
         ("nisa", "📈 現実 NISA（予測）"),
+        ("ideal_bank", "🏦 理想 銀行"),
+        ("ideal_nisa", "📈 理想 NISA"),
     ]:
         if col in df.columns:
             fig.add_trace(go.Scatter(
-                x=df["date"],
-                y=df[col],
+                x=df["date"], y=df[col],
                 mode="lines",
                 name=nm,
                 line=dict(dash="dot"),
@@ -924,27 +940,21 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_
                 hovertemplate="日付: %{x|%Y-%m}<br>%{y:,.0f} 円<extra></extra>"
             ))
 
-    # Goals表示
+    # Goals表示（今のまま）
     if show_goals:
         if "outflow" in df.columns:
             out_df = df[df["outflow"].fillna(0) > 0].copy()
             if not out_df.empty:
                 out_df = out_df.sort_values("date").head(max_goal_marks)
-
                 max_labels = 4
-                label_idx = set()
-                if len(out_df) <= max_labels:
-                    label_idx = set(range(len(out_df)))
-                else:
-                    for k in range(max_labels):
-                        label_idx.add(int(round(k * (len(out_df) - 1) / (max_labels - 1))))
+                label_idx = set(range(len(out_df))) if len(out_df) <= max_labels else set(
+                    int(round(k * (len(out_df) - 1) / (max_labels - 1))) for k in range(max_labels)
+                )
 
                 for i2, r2 in enumerate(out_df.itertuples()):
                     x = pd.to_datetime(r2.date).to_pydatetime()
                     amt = float(getattr(r2, "outflow"))
-
                     fig.add_vline(x=x, line_dash="dot", line_width=1, opacity=0.5)
-
                     if i2 in label_idx:
                         fig.add_annotation(
                             x=x, y=1.0, yref="paper",
@@ -983,7 +993,7 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_
                 ))
 
     fig.update_layout(
-        title="🔮 将来シミュレーション（現実 vs 理想 + 実質1億 + Goals）",
+        title="🔮 将来シミュレーション（FI基準：現実 vs 理想 + Goals）",
         xaxis_title="日付",
         yaxis_title="金額（円）",
         hovermode="x unified",
@@ -991,8 +1001,7 @@ def plot_future_simulation_v3(df_sim, show_goals=True, max_goal_marks=12, chart_
     )
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
-    st.caption("※ 下のバー（期間スライダー）をドラッグすると、表示期間を自由に変更できます。")
-    st.caption("※ 内訳（銀行/NISA）や目標マーカーは凡例クリックで表示できます。")
+    st.caption("※ 理想ラインは凡例クリックで表示/非表示を切り替えできます。")
 
 
 # ==================================================
@@ -1017,7 +1026,6 @@ def estimate_realistic_monthly_contribution(df_balance, months=6):
 
     monthly_last["diff"] = monthly_last["total"].diff()
     diffs = monthly_last["diff"].dropna().tail(months)
-
     if diffs.empty:
         return 0.0
 
@@ -1037,9 +1045,9 @@ def main():
 
     ef = estimate_emergency_fund(df_params, df_fix, df_forms, today)
     safe_cash = get_latest_bank_balance(df_balance)
-
     summary = calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
 
+    # NISA調整（防衛費ブレーキ）
     adjusted_nisa, nisa_reason = adjust_nisa_by_emergency_status(
         nisa_amount=summary["nisa_save"],
         safe_cash=safe_cash,
@@ -1047,10 +1055,12 @@ def main():
     )
     bank_save_adjusted = summary["bank_save"] + (summary["nisa_save"] - adjusted_nisa)
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("🏦 銀行への積立", f"{int(bank_save_adjusted):,} 円")
-    col2.metric(f"📈 NISA積立（モード {summary['nisa_mode']}）", f"{int(adjusted_nisa):,} 円")
-    col3.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
+    # -------------------------
+    # KPI（2枚）
+    # -------------------------
+    k1, k2 = st.columns(2)
+    k1.metric("💾 今月の積立（銀行＋NISA）", f"{int(bank_save_adjusted + adjusted_nisa):,} 円")
+    k2.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
 
     st.caption(f"生活防衛費ステータスによるNISA調整：{nisa_reason}")
     if summary["available_cash"] <= 0:
@@ -1065,6 +1075,9 @@ def main():
     st.caption(f"固定費：{int(summary['fix_cost']):,} 円 / 変動費：{int(summary['variable_cost']):,} 円")
     st.caption(f"※ 現在資産：{int(summary['current_asset']):,} 円")
 
+    # -------------------------
+    # 赤字分析
+    # -------------------------
     deficit = analyze_deficit(summary["monthly_income"], summary["fix_cost"], summary["variable_cost"])
     if deficit is not None:
         st.warning(f"⚠️ 今月は {int(deficit['total_deficit']):,} 円の赤字です")
@@ -1076,6 +1089,9 @@ def main():
         else:
             st.write(f"変動費は想定範囲内です（想定：{int(deficit['var_expected']):,} 円 / 実際：{int(deficit['var_actual']):,} 円）")
 
+    # -------------------------
+    # メモ分析
+    # -------------------------
     st.subheader("🧠 今月の振り返り（メモ分析）")
     memo = analyze_memo_frequency_advanced(
         df_forms, today,
@@ -1116,6 +1132,9 @@ def main():
                 f"過去平均 {int(item['past_avg']):,} 円（**+{int(item['diff']):,} 円**）"
             )
 
+    # -------------------------
+    # 生活防衛費
+    # -------------------------
     st.subheader("🛡️ 生活防衛費（自動算出）")
     c1, c2, c3 = st.columns(3)
     c1.metric("推定 1か月生活費（中央値）", f"{int(ef['monthly_est_median']):,} 円")
@@ -1151,36 +1170,47 @@ def main():
         df_ef_view = df_ef_view.apply(pd.to_numeric, errors="coerce").fillna(0)
         st.dataframe(df_ef_view, use_container_width=True)
 
+    # -------------------------
+    # 資産推移
+    # -------------------------
     st.subheader("📊 資産推移")
     plot_asset_trend(df_balance, ef)
 
     # ==========================================
-    # 将来シミュレーション
+    # FI 設定（表示）
     # ==========================================
-    st.subheader("🔮 将来シミュレーション（実質1億＋内訳）")
+    st.subheader("🏁 FI設計（目標ライン）")
+    fi = get_fi_settings(df_params, today)
+    f1, f2, f3 = st.columns(3)
+    f1.metric("FI月生活費（基準）", f"{int(fi['fi_monthly']):,} 円")
+    f2.metric("安全取り崩し率", f"{fi['swr']*100:.1f} %")
+    f3.metric("FI必要資産", f"{int(fi['fi_required']):,} 円")
+    st.caption("※ FI必要資産 = (月額×12) ÷ 安全取り崩し率（年金ゼロ想定）")
+
+    # ==========================================
+    # 将来シミュレーション（FI版）
+    # ==========================================
+    st.subheader("🔮 将来シミュレーション（FI基準＋Goals）")
 
     annual_return = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
-    inflation_rate = to_float_safe(get_latest_parameter(df_params, "インフレ率", today), default=0.02)
-    end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
+
+    # 終点年齢（デフォルト60、互換で老後年齢）
+    end_age = get_latest_parameter(df_params, "働く最長年齢", today)
+    if end_age is None:
+        end_age = get_latest_parameter(df_params, "老後年齢", today)
+    end_age = to_float_safe(end_age, default=60.0)
+
     current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
     bank_min_monthly = to_float_safe(get_latest_parameter(df_params, "銀行最低積立額", today), default=0.0)
-
-    target_real_today = 100_000_000.0
     ideal_ratios = get_ideal_nisa_ratios_from_params(df_params, today)
 
     current_bank = get_latest_bank_balance(df_balance) or 0.0
-    current_nisa = 0.0
-    if not df_balance.empty and {"日付", "NISA評価額"}.issubset(df_balance.columns):
-        dtmp = df_balance.dropna(subset=["日付"]).sort_values("日付")
-        if not dtmp.empty:
-            v = pd.to_numeric(dtmp.iloc[-1]["NISA評価額"], errors="coerce")
-            current_nisa = 0.0 if pd.isna(v) else float(v)
+    current_nisa = get_latest_nisa_value(df_balance)
 
     real_total_pmt = estimate_realistic_monthly_contribution(df_balance, months=6)
 
     den = float(bank_save_adjusted + adjusted_nisa)
     nisa_share = (adjusted_nisa / den) if den > 0 else 0.5
-
     monthly_nisa_save_plan = real_total_pmt * nisa_share
     monthly_bank_save_plan = real_total_pmt * (1 - nisa_share)
 
@@ -1189,35 +1219,32 @@ def main():
         f"（銀行 {int(monthly_bank_save_plan):,} ・NISA {int(monthly_nisa_save_plan):,}）"
     )
 
-    df_sim, ideal_pmt, months_left, target_real_end = simulate_future_paths_v3_dynamic_ratio(
+    df_sim, ideal_pmt, months_left = simulate_future_paths_v4_fi(
         today=today,
         current_bank=current_bank,
         current_nisa=current_nisa,
         monthly_bank_save_plan=monthly_bank_save_plan,
         monthly_nisa_save_plan=monthly_nisa_save_plan,
         annual_return=annual_return,
-        inflation_rate=inflation_rate,
         current_age=current_age,
         end_age=end_age,
-        target_real_today=target_real_today,
         ef=ef,
         ideal_ratios=ideal_ratios,
+        fi_required_asset=fi["fi_required"],
         df_goals=df_goals,
         bank_min_monthly=bank_min_monthly,
     )
 
     st.caption(
-        f"前提：投資年利 {annual_return*100:.1f}% / インフレ率 {inflation_rate*100:.1f}% / "
-        f"年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
+        f"前提：投資年利 {annual_return*100:.1f}% / 年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
     )
-    st.caption(f"実質1億（今日価値）を達成するための最終名目目標：{int(target_real_end):,} 円")
-    st.caption(f"理想軌道に必要な毎月の積立（逆算）：**{int(ideal_pmt):,} 円 / 月**")
+    st.caption(f"FIライン（必要資産）：{int(fi['fi_required']):,} 円")
+    st.caption(f"FIを“終点年齢までに満たす”理想積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（理想比率は防衛費ステータス連動）")
 
+    # 期間スライダー
     chart_slot = st.empty()
-
     df_sim["date"] = pd.to_datetime(df_sim["date"], errors="coerce")
     df_sim = df_sim.dropna(subset=["date"])
-
     min_d = df_sim["date"].min().date()
     max_d = df_sim["date"].max().date()
 
@@ -1233,10 +1260,10 @@ def main():
     df_sim_view = df_sim.loc[mask].copy()
 
     with chart_slot.container():
-        plot_future_simulation_v3(df_sim_view, chart_key="future_sim_all")
+        plot_future_simulation_fi(df_sim_view, chart_key="future_sim_all")
 
+    # 詳細
     st.markdown("### 🧾 シミュレーション詳細（表示期間内）")
-
     tab1, tab2 = st.tabs(["💸 支出", "🎯 目標"])
 
     with tab1:
