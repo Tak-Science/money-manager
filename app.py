@@ -163,9 +163,7 @@ def calculate_monthly_variable_cost(df_forms, today):
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
 
-    return float(
-        d[(d["month"] == current_month) & (d["費目"].isin(EXPENSE_CATEGORIES))]["金額"].sum()
-    )
+    return float(d[(d["month"] == current_month) & (d["費目"].isin(EXPENSE_CATEGORIES))]["金額"].sum())
 
 
 def calculate_monthly_variable_income(df_forms, today):
@@ -178,9 +176,7 @@ def calculate_monthly_variable_income(df_forms, today):
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
 
-    return float(
-        d[(d["month"] == current_month) & (d["費目"].isin(INCOME_CATEGORIES))]["金額"].sum()
-    )
+    return float(d[(d["month"] == current_month) & (d["費目"].isin(INCOME_CATEGORIES))]["金額"].sum())
 
 
 # ==================================================
@@ -234,7 +230,7 @@ def calculate_nisa_amount(df_params, today, available_cash, current_asset):
     # 互換：昔の「目標資産額」系は残しておく（Bで使う）
     target_asset = to_float_safe(get_latest_parameter(df_params, "目標資産額", today), default=100_000_000.0)
 
-    # 「働く最長年齢」（未設定なら60、互換で老後年齢も参照）
+    # 終点年齢（未設定なら60、互換で老後年齢）
     end_age = get_latest_parameter(df_params, "働く最長年齢", today)
     if end_age is None:
         end_age = get_latest_parameter(df_params, "老後年齢", today)
@@ -528,20 +524,17 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
 # ==================================================
 # FI（必要資産）計算
 # ==================================================
-def get_fi_settings(df_params, today):
-    # 月40万を基準（あなたの方針）
-    fi_monthly = to_float_safe(get_latest_parameter(df_params, "FI月生活費（基準）", today), default=400_000.0)
+def get_fi_settings(df_params, today, fi_monthly_override=None):
+    if fi_monthly_override is None:
+        fi_monthly = to_float_safe(get_latest_parameter(df_params, "FI月生活費（基準）", today), default=400_000.0)
+    else:
+        fi_monthly = float(fi_monthly_override)
 
-    # 安全寄り（あなたの方針）→デフォルト3%
     swr = to_float_safe(get_latest_parameter(df_params, "安全取り崩し率", today), default=0.03)
     swr = min(max(float(swr), 0.005), 0.10)  # 暴走防止
 
     fi_required = (fi_monthly * 12.0) / swr
-    return {
-        "fi_monthly": float(fi_monthly),
-        "swr": float(swr),
-        "fi_required": float(fi_required),
-    }
+    return {"fi_monthly": float(fi_monthly), "swr": float(swr), "fi_required": float(fi_required)}
 
 
 # ==================================================
@@ -722,7 +715,7 @@ def simulate_future_paths_v4_fi(
 
     pv_total = current_bank + current_nisa
 
-    # 理想：最終時点で「FI必要資産」を満たすための毎月積立（逆算）
+    # 理想：終点で「FI必要資産」に到達する毎月積立
     ideal_pmt = solve_required_monthly_pmt(
         pv=pv_total,
         fv_target=float(fi_required_asset),
@@ -750,25 +743,21 @@ def simulate_future_paths_v4_fi(
             names = [x["name"] for x in items]
             outflow_name = " / ".join(names[:3]) + (" …" if len(names) > 3 else "")
 
-        used_bank = used_nisa = 0.0
-        used_ideal_bank = used_ideal_nisa = 0.0
-
         if outflow > 0:
             bank, nisa, used_bank, used_nisa, unpaid_real = apply_outflow_bank_first(bank, nisa, outflow)
-            ideal_bank, ideal_nisa, used_ideal_bank, used_ideal_nisa, unpaid_ideal = apply_outflow_bank_first(ideal_bank, ideal_nisa, outflow)
+            ideal_bank, ideal_nisa, _, _, unpaid_ideal = apply_outflow_bank_first(ideal_bank, ideal_nisa, outflow)
         else:
-            unpaid_real = 0.0
-            unpaid_ideal = 0.0
+            used_bank = used_nisa = 0.0
+            unpaid_real = unpaid_ideal = 0.0
 
         total = bank + nisa
         ideal_total = ideal_bank + ideal_nisa
 
         # 理想比率（防衛費ステータス連動）
-        safe_cash_sim = ideal_bank
-        ratio = choose_ideal_nisa_ratio_by_emergency_from_params(safe_cash_sim, ef, ideal_ratios)
+        ratio = choose_ideal_nisa_ratio_by_emergency_from_params(ideal_bank, ef, ideal_ratios)
         ratio = min(max(float(ratio), 0.0), 1.0)
 
-        # 理想積立（銀行最低積立を優先）
+        # 理想積立（銀行最低積立優先）
         bank_first = min(bank_min_monthly, ideal_pmt)
         remaining = max(ideal_pmt - bank_first, 0.0)
         ideal_bank_add = bank_first + remaining * (1 - ratio)
@@ -806,12 +795,10 @@ def simulate_future_paths_v4_fi(
             "ideal_pmt": ideal_pmt,
             "ideal_nisa_ratio": ratio,
 
-            # FI
             "fi_required": float(fi_required_asset),
             "fi_achieved_real": (total >= float(fi_required_asset)),
             "fi_achieved_ideal": (ideal_total >= float(fi_required_asset)),
 
-            # Goals
             "outflow": outflow,
             "outflow_name": outflow_name,
             "outflow_used_bank": used_bank,
@@ -871,7 +858,6 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
 
     fig = go.Figure()
 
-    # 現実（合計）
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["total"],
         mode="lines",
@@ -887,7 +873,6 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
         )
     ))
 
-    # 理想（合計）※初期は非表示（ごちゃつき防止）
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["ideal_total"],
         mode="lines",
@@ -897,7 +882,6 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
         hovertemplate="日付: %{x|%Y-%m}<br>理想 合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # FIライン（水平線）
     fi_required = float(df["fi_required"].iloc[0]) if "fi_required" in df.columns else None
     if fi_required is not None:
         fig.add_hline(
@@ -907,10 +891,8 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
             annotation_position="top left",
         )
 
-    # FI達成月（現実）を1点だけマーク（ごちゃつかない）
     achieved_dt = find_first_achieved_month(df, "fi_achieved_real")
     if achieved_dt is not None:
-        # その月の値を取る
         tmp = df[df["date"] == achieved_dt]
         if not tmp.empty:
             y = float(tmp.iloc[0]["total"])
@@ -923,7 +905,6 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
                 hovertemplate="FI達成: %{x|%Y-%m}<br>合計資産: %{y:,.0f} 円<extra></extra>",
             ))
 
-    # 内訳（初期はlegendonly）
     for col, nm in [
         ("bank", "🏦 現実 銀行（予測）"),
         ("nisa", "📈 現実 NISA（予測）"),
@@ -940,7 +921,7 @@ def plot_future_simulation_fi(df_sim, show_goals=True, max_goal_marks=12, chart_
                 hovertemplate="日付: %{x|%Y-%m}<br>%{y:,.0f} 円<extra></extra>"
             ))
 
-    # Goals表示（今のまま）
+    # Goals表示
     if show_goals:
         if "outflow" in df.columns:
             out_df = df[df["outflow"].fillna(0) > 0].copy()
@@ -1047,7 +1028,6 @@ def main():
     safe_cash = get_latest_bank_balance(df_balance)
     summary = calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
 
-    # NISA調整（防衛費ブレーキ）
     adjusted_nisa, nisa_reason = adjust_nisa_by_emergency_status(
         nisa_amount=summary["nisa_save"],
         safe_cash=safe_cash,
@@ -1055,9 +1035,7 @@ def main():
     )
     bank_save_adjusted = summary["bank_save"] + (summary["nisa_save"] - adjusted_nisa)
 
-    # -------------------------
     # KPI（2枚）
-    # -------------------------
     k1, k2 = st.columns(2)
     k1.metric("💾 今月の積立（銀行＋NISA）", f"{int(bank_save_adjusted + adjusted_nisa):,} 円")
     k2.metric("🎉 自由に使えるお金", f"{int(summary['free_cash']):,} 円")
@@ -1075,9 +1053,6 @@ def main():
     st.caption(f"固定費：{int(summary['fix_cost']):,} 円 / 変動費：{int(summary['variable_cost']):,} 円")
     st.caption(f"※ 現在資産：{int(summary['current_asset']):,} 円")
 
-    # -------------------------
-    # 赤字分析
-    # -------------------------
     deficit = analyze_deficit(summary["monthly_income"], summary["fix_cost"], summary["variable_cost"])
     if deficit is not None:
         st.warning(f"⚠️ 今月は {int(deficit['total_deficit']):,} 円の赤字です")
@@ -1089,9 +1064,6 @@ def main():
         else:
             st.write(f"変動費は想定範囲内です（想定：{int(deficit['var_expected']):,} 円 / 実際：{int(deficit['var_actual']):,} 円）")
 
-    # -------------------------
-    # メモ分析
-    # -------------------------
     st.subheader("🧠 今月の振り返り（メモ分析）")
     memo = analyze_memo_frequency_advanced(
         df_forms, today,
@@ -1132,9 +1104,6 @@ def main():
                 f"過去平均 {int(item['past_avg']):,} 円（**+{int(item['diff']):,} 円**）"
             )
 
-    # -------------------------
-    # 生活防衛費
-    # -------------------------
     st.subheader("🛡️ 生活防衛費（自動算出）")
     c1, c2, c3 = st.columns(3)
     c1.metric("推定 1か月生活費（中央値）", f"{int(ef['monthly_est_median']):,} 円")
@@ -1170,22 +1139,33 @@ def main():
         df_ef_view = df_ef_view.apply(pd.to_numeric, errors="coerce").fillna(0)
         st.dataframe(df_ef_view, use_container_width=True)
 
-    # -------------------------
-    # 資産推移
-    # -------------------------
     st.subheader("📊 資産推移")
     plot_asset_trend(df_balance, ef)
 
     # ==========================================
-    # FI 設定（表示）
+    # FI 設計（UIで35/40/45切替）
     # ==========================================
     st.subheader("🏁 FI設計（目標ライン）")
-    fi = get_fi_settings(df_params, today)
-    f1, f2, f3 = st.columns(3)
-    f1.metric("FI月生活費（基準）", f"{int(fi['fi_monthly']):,} 円")
-    f2.metric("安全取り崩し率", f"{fi['swr']*100:.1f} %")
-    f3.metric("FI必要資産", f"{int(fi['fi_required']):,} 円")
-    st.caption("※ FI必要資産 = (月額×12) ÷ 安全取り崩し率（年金ゼロ想定）")
+
+    # 既定値：ParametersのFI月生活費（なければ40万）
+    fi_monthly_default = to_float_safe(get_latest_parameter(df_params, "FI月生活費（基準）", today), default=400_000.0)
+    choices = [350_000, 400_000, 450_000]
+    try:
+        default_idx = choices.index(int(fi_monthly_default))
+    except Exception:
+        default_idx = 1  # 40万
+
+    label = st.radio(
+        "老後の月生活費（FIライン）を選択",
+        options=["35万円", "40万円", "45万円"],
+        index=default_idx,
+        horizontal=True,
+        key="fi_monthly_choice",
+    )
+    fi_monthly_map = {"35万円": 350_000, "40万円": 400_000, "45万円": 450_000}
+    fi_monthly_selected = fi_monthly_map[label]
+
+    fi = get_fi_settings(df_params, today, fi_monthly_override=fi_monthly_selected)
 
     # ==========================================
     # 将来シミュレーション（FI版）
@@ -1194,7 +1174,6 @@ def main():
 
     annual_return = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
 
-    # 終点年齢（デフォルト60、互換で老後年齢）
     end_age = get_latest_parameter(df_params, "働く最長年齢", today)
     if end_age is None:
         end_age = get_latest_parameter(df_params, "老後年齢", today)
@@ -1214,11 +1193,6 @@ def main():
     monthly_nisa_save_plan = real_total_pmt * nisa_share
     monthly_bank_save_plan = real_total_pmt * (1 - nisa_share)
 
-    st.caption(
-        f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月 "
-        f"（銀行 {int(monthly_bank_save_plan):,} ・NISA {int(monthly_nisa_save_plan):,}）"
-    )
-
     df_sim, ideal_pmt, months_left = simulate_future_paths_v4_fi(
         today=today,
         current_bank=current_bank,
@@ -1235,16 +1209,28 @@ def main():
         bank_min_monthly=bank_min_monthly,
     )
 
+    # ---------- FI達成月（カード表示） ----------
+    achieved_dt_all = find_first_achieved_month(df_sim, "fi_achieved_real")
+    achieved_text = achieved_dt_all.strftime("%Y-%m") if achieved_dt_all is not None else "未達"
+
+    # FIカード（3枚）
+    f1, f2, f3 = st.columns(3)
+    f1.metric("FI月生活費（選択）", f"{int(fi['fi_monthly']):,} 円")
+    f2.metric("FI必要資産", f"{int(fi['fi_required']):,} 円")
+    f3.metric("FI達成月（現実予測）", achieved_text)
+
     st.caption(
         f"前提：投資年利 {annual_return*100:.1f}% / 年齢 {current_age:.0f} → {end_age:.0f} 歳（残り {months_left} か月）"
     )
-    st.caption(f"FIライン（必要資産）：{int(fi['fi_required']):,} 円")
+    st.caption(f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月（銀行 {int(monthly_bank_save_plan):,} ・NISA {int(monthly_nisa_save_plan):,}）")
     st.caption(f"FIを“終点年齢までに満たす”理想積立（逆算）：**{int(ideal_pmt):,} 円 / 月**（理想比率は防衛費ステータス連動）")
 
-    # 期間スライダー
+    # 期間スライダー（表示だけ切る）
     chart_slot = st.empty()
+
     df_sim["date"] = pd.to_datetime(df_sim["date"], errors="coerce")
     df_sim = df_sim.dropna(subset=["date"])
+
     min_d = df_sim["date"].min().date()
     max_d = df_sim["date"].max().date()
 
@@ -1262,7 +1248,6 @@ def main():
     with chart_slot.container():
         plot_future_simulation_fi(df_sim_view, chart_key="future_sim_all")
 
-    # 詳細
     st.markdown("### 🧾 シミュレーション詳細（表示期間内）")
     tab1, tab2 = st.tabs(["💸 支出", "🎯 目標"])
 
