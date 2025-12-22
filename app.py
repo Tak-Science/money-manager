@@ -176,19 +176,30 @@ def main():
 
     df_goals_progress = lg.allocate_goals_progress(df_goals_norm, actual_goals_cum)
 
+    # ... (前略)
+    
     # 理想額の計算
     goals_save_plan_ideal, df_goals_plan_detail = lg.compute_goals_monthly_plan(
         df_goals_progress, today,
         emergency_not_met=emergency_not_met
     )
 
-    # 現実的な配分計算
+    # ★追加：資産余剰（緑色のバー）を先に計算する
+    saved_goals_total = lg.goals_log_cumulative(df_goals_log)
+    emergency_target = float(ef["fund_rec"])
+    
+    # 余剰 = 銀行残高 - Goals預かり - 防衛費推奨額
+    # これがプラスなら、赤字の月でもここからNISAを出して良い
+    stock_surplus = max(bank_balance - saved_goals_total - emergency_target, 0.0)
+
+    # 現実的な配分計算（Logic V3）
     available_cash = float(summary["available_cash"])
     
     allocation = lg.allocate_monthly_budget(
         available_cash=available_cash,
         df_goals_plan_detail=df_goals_plan_detail, 
-        emergency_not_met=emergency_not_met
+        emergency_not_met=emergency_not_met,
+        stock_surplus=stock_surplus  # ★ここに追加！
     )
 
     nisa_save = allocation["nisa_save"]
@@ -205,16 +216,29 @@ def main():
     st.subheader("📌 KPI（今月）")
     k1, k2, k3, k4 = st.columns(4)
     
-    k1.metric(
-        "🏦 銀行積立", 
-        f"{bank_save:,} 円",
-        help=f"最低確保額（{config.MIN_BANK_AMOUNT:,}円）を含みます。"
-    )
+    # 銀行積立の表示ロジック
+    if emergency_not_met:
+        k1.metric(
+            "🏦 銀行積立", 
+            f"{bank_save:,} 円",
+            help=f"防衛費が未達のため、最低 {config.MIN_BANK_AMOUNT:,} 円を確保しようとしています。"
+        )
+    else:
+        k1.metric(
+            "🏦 銀行積立", 
+            "✅ 完了",
+            help="生活防衛費が目標に達しているため、これ以上の積立は不要です。"
+        )
     
+    # NISA積立の表示ロジック
+    nisa_help = f"最低確保額（{config.MIN_NISA_AMOUNT:,}円）。"
+    if available_cash <= 0 and nisa_save > 0:
+        nisa_help += "\n\n★今月は赤字ですが、銀行の余剰資金を活用して積み立てます（ナイス判断！）。"
+        
     k2.metric(
         "📈 NISA積立", 
         f"{nisa_save:,} 円",
-        help=f"最低確保額（{config.MIN_NISA_AMOUNT:,}円）を含みます。まずはここを死守します。"
+        help=nisa_help
     )
     
     k3.metric(
@@ -222,7 +246,7 @@ def main():
         f"{goals_save_actual:,} 円",
         delta=f"-{goals_shortfall:,} 円 (繰越)" if goals_shortfall > 0 else "Plan OK",
         delta_color="off", 
-        help=f"理想額：{goals_ideal_total:,} 円\n\n今の収入で払える分だけを、期限が近いGoals（博士1年目など）から優先して埋めています。不足分は将来回収します。"
+        help=f"理想額：{goals_ideal_total:,} 円\n\n今の収入で払える分だけを、期限が近いGoalsから優先して埋めています。"
     )
     
     k4.metric(
@@ -625,3 +649,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
