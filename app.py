@@ -20,21 +20,20 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/1pb1IH1twG9XDIo6Ma88XKcndnnet-dlHxQPu9zjbJ5w/edit?gid=2102244245#gid=2102244245"
 
 # ==================================================
-# 戦略パラメータ
+# 戦略パラメータ（学生・研究者向けチューニング）
 # ==================================================
 NEAR_YEARS = 2
 MID_YEARS = 5
 
-# 距離係数（遠距離の負担を軽減）
 DIST_COEF = {
-    "near": 1.0,
-    "mid": 0.3,
-    "long": 0.05,
+    "near": 1.0,   
+    "mid": 0.3,    
+    "long": 0.05,  
 }
 
 STATE_COEF_EMERGENCY_NOT_MET = 1.1
 
-# NISA特別ルール（軍資金10万円期間）
+# NISA特別ルール（軍資金10万円作戦）
 NISA_FIXED_START = date(2025, 2, 7)
 NISA_FIXED_END = date(2025, 12, 7)
 NISA_FIXED_AMOUNT = 10000.0
@@ -46,7 +45,7 @@ EXPENSE_CATEGORIES = [
 INCOME_CATEGORIES = ["給与・バイト代", "臨時収入"]
 
 # ==================================================
-# データ読み込み・前処理
+# データ接続・取得・前処理
 # ==================================================
 def get_spreadsheet():
     creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"], scopes=SCOPES)
@@ -131,7 +130,7 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
 
 # ==================================================
-# 計算・ロジック
+# 計算・ロジック関数群
 # ==================================================
 def get_latest_parameter(df, item, target_date):
     if df is None or df.empty: return None
@@ -184,7 +183,6 @@ def get_latest_nisa_balance(df_balance):
 def get_latest_total_asset(df_balance):
     return float((get_latest_bank_balance(df_balance) or 0.0) + (get_latest_nisa_balance(df_balance) or 0.0))
 
-# --- 生活防衛費 ---
 def build_month_list(today, months_back=12):
     end = pd.Period(today.strftime("%Y-%m"), freq="M")
     return list(pd.period_range(end=end, periods=months_back, freq="M").astype(str))
@@ -238,15 +236,12 @@ def estimate_emergency_fund(df_params, df_fix, df_forms, today):
     }
 
 # --- Goals ---
-def convert_to_jpy_stub(amount, currency, date=None):
-    try: return float(amount)
-    except: return None
-
 def months_until(today, deadline):
     if pd.isna(deadline): return 1
     t = pd.Period(pd.to_datetime(today), freq="M")
     d = pd.Period(pd.to_datetime(deadline), freq="M")
-    return int(max((d - t).n, 1))
+    diff = (d - t).n
+    return int(max(diff, 1))
 
 def classify_distance_bucket(today, deadline):
     m = months_until(today, deadline)
@@ -277,8 +272,10 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
     outflows, targets = {}, {}
     rows = []
     for _, r in df.iterrows():
-        try: amt = float(r["金額"])
+        try:
+            amt = float(r["金額"])
         except: continue
+        
         item = {
             "name": str(r["目標名"]), "amount": amt, "priority": str(r["優先度"]),
             "deadline": r["達成期限"], "bucket": str(r["bucket"]), "type": str(r["タイプ"])
@@ -315,7 +312,7 @@ def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
     d["months_left"] = d["deadline"].apply(lambda x: months_until(today, x))
     d["min_pmt"] = d.apply(lambda r: 0.0 if r["remaining_amount"]<=0 else r["remaining_amount"]/max(int(r["months_left"]), 1), axis=1)
     d["dist_coef"] = d["bucket"].apply(lambda b: float(DIST_COEF.get(str(b), 1.0)))
-    d["plan_pmt"] = d.apply(lambda r: 0.0 if r["remaining_amount"]<=0 else r["min_pmt"] * (1.0 + (state-1.0)*r["dist_coef"]) * r["dist_coef"], axis=1)
+    d["plan_pmt"] = d.apply(lambda r: 0.0 if r["remaining_amount"]<=0 else r["min_pmt"] * (1.0 + (state-1.0)*r["dist_coef"]) * r["dist_coef"], axis=1) 
     return float(d["plan_pmt"].sum()), d
 
 def goals_log_monthly_actual(df_log, today):
@@ -329,21 +326,8 @@ def goals_log_cumulative(df_log):
     return float(pd.to_numeric(df_log["積立額"], errors="coerce").fillna(0).sum())
 
 # ==================================================
-# FI / NISA
+# FI Simulation
 # ==================================================
-def compute_nisa_coefficient(*, available_cash_after_goals, emergency_not_met, emergency_is_danger, goals_shortfall):
-    if available_cash_after_goals <= 0: return 0.0, "赤字またはGoals後に余剰なし → NISA 0"
-    if goals_shortfall: return 0.0, "Goals積立が不足 → NISA 0"
-    if emergency_is_danger: return 0.0, "生活防衛費 危険ゾーン → NISA 0"
-    if emergency_not_met: return 0.0, "生活防衛費 未達 → NISA 0（2段階）"
-    return 1.0, "条件OK → NISA 100%"
-
-def compute_fi_required_asset(monthly_spend, swr_assumption):
-    return float(monthly_spend * 12.0 / swr_assumption) if swr_assumption > 0 else float("inf")
-
-def compute_current_swr(monthly_spend, investable_asset):
-    return float(monthly_spend * 12.0 / investable_asset) if investable_asset > 0 else None
-
 def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     if r_month <= 0: return max((fv_target - pv) / max(n_months,1), 0.0)
     a = (1 + r_month) ** n_months
@@ -381,12 +365,11 @@ def simulate_fi_paths(today, current_age, end_age, annual_return, cur_em, cur_gf
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
     
-    # 理想ライン（参考）
     pv_inv = cur_em + cur_ni
     ideal_pmt = solve_required_monthly_pmt(pv_inv, fi_target, r, months_left)
     
     em, gf, ni = cur_em, cur_gf, cur_ni
-    em_i, gf_i, ni_i = cur_em, cur_gf, cur_ni
+    em_i, gf_i, ni_i = cur_em, cur_gf, cur_ni 
 
     rows = []
     for i, dt in enumerate(dates):
@@ -394,11 +377,9 @@ def simulate_fi_paths(today, current_age, end_age, annual_return, cur_em, cur_gf
         items = outflows.get(month_key, [])
         outflow = sum(x["amount"] for x in items) if items else 0.0
         
-        # 支出イベント
         gf, em, ni, _, _, _, _ = apply_outflow_three_pockets(gf, em, ni, outflow)
         gf_i, em_i, ni_i, _, _, _, _ = apply_outflow_three_pockets(gf_i, em_i, ni_i, outflow)
 
-        # 記録
         fi_ok_real = (em + ni >= fi_target) and (em >= ef_rec)
         rows.append({
             "date": dt,
@@ -411,7 +392,6 @@ def simulate_fi_paths(today, current_age, end_age, annual_return, cur_em, cur_gf
 
         if i == len(dates) - 1: break
 
-        # NISA特別ルール適用
         dt_date = dt.date()
         if NISA_FIXED_START <= dt_date <= NISA_FIXED_END:
             ni_add = NISA_FIXED_AMOUNT
@@ -425,96 +405,198 @@ def simulate_fi_paths(today, current_age, end_age, annual_return, cur_em, cur_gf
         ni = (ni + ni_add) * (1 + r)
         ni_i = (ni_i + ideal_pmt * 0.8) * (1 + r)
         em_i += ideal_pmt * 0.2
-        gf_i += monthly_gf_real
+        gf_i += monthly_gf_real 
 
     return pd.DataFrame(rows)
 
 # ==================================================
-# UI Component Functions (Graph Integrated)
+# 統合グラフ（過去+未来）
 # ==================================================
-def ui_kpi_cards(bank_save, nisa_save, goals_save, free_cash, nisa_reason, ef_status, ef_ratio):
+def plot_combined_financial_timeline(df_balance, df_fi_sim, fi_target_asset, ef_rec):
+    """
+    Balance_Log（過去）と FI Simulation（未来）を1つのグラフに統合して表示する。
+    クリックで表示切り替え可能なインタラクティブな凡例付き。
+    """
+    fig = go.Figure()
+
+    # --- 1. 過去データ（Balance_Log） ---
+    if df_balance is not None and not df_balance.empty:
+        df_hist = df_balance.copy().dropna(subset=["日付"]).sort_values("日付")
+        df_hist["銀行残高"] = pd.to_numeric(df_hist["銀行残高"], errors="coerce").fillna(0)
+        df_hist["NISA評価額"] = pd.to_numeric(df_hist["NISA評価額"], errors="coerce").fillna(0)
+        df_hist["合計資産"] = df_hist["銀行残高"] + df_hist["NISA評価額"]
+
+        # メイン（合計）
+        fig.add_trace(go.Scatter(
+            x=df_hist["日付"], y=df_hist["合計資産"],
+            mode="lines",
+            name="📊 総資産（実績）",
+            line=dict(color="#1f77b4", width=3), # 青色
+            hovertemplate="%{x|%Y-%m}<br>実績合計: %{y:,.0f} 円"
+        ))
+
+        # 内訳（デフォルトは非表示 legendonly にしても良いが、見せたいので表示）
+        fig.add_trace(go.Scatter(
+            x=df_hist["日付"], y=df_hist["銀行残高"],
+            mode="lines",
+            name="🏦 銀行残高（実績）",
+            line=dict(color="#2ca02c", width=1.5), # 緑色
+            visible="legendonly" # クリックで見れるように隠しておく
+        ))
+        fig.add_trace(go.Scatter(
+            x=df_hist["日付"], y=df_hist["NISA評価額"],
+            mode="lines",
+            name="📈 NISA（実績）",
+            line=dict(color="#ff7f0e", width=1.5), # オレンジ
+            visible="legendonly"
+        ))
+
+    # --- 2. 未来データ（FI Simulation） ---
+    if df_fi_sim is not None and not df_fi_sim.empty:
+        df_fut = df_fi_sim.copy().sort_values("date")
+        
+        # 実績の最後とシミュレーションの最初をつなぐ（見た目のため）
+        # ※ここでは簡易的にそのままプロット
+
+        # 未来の合計（Goals含む全体）
+        fig.add_trace(go.Scatter(
+            x=df_fut["date"], y=df_fut["total_real"],
+            mode="lines",
+            name="🔮 総資産（予測）",
+            line=dict(color="#1f77b4", dash="dot", width=2), # 青の点線
+            hovertemplate="%{x|%Y-%m}<br>予測合計: %{y:,.0f} 円"
+        ))
+
+        # 未来の投資可能資産（FI用）
+        fig.add_trace(go.Scatter(
+            x=df_fut["date"], y=df_fut["investable_real"],
+            mode="lines",
+            name="💰 投資可能資産（予測）",
+            line=dict(color="#d62728", dash="dash", width=2), # 赤の破線
+            hovertemplate="%{x|%Y-%m}<br>投資可能: %{y:,.0f} 円"
+        ))
+
+        # FI達成点
+        ok = df_fut[df_fut["fi_ok_real"] == True].copy()
+        if not ok.empty:
+            first = ok.iloc[0]
+            fig.add_trace(go.Scatter(
+                x=[first["date"]], y=[first["investable_real"]],
+                mode="markers",
+                name="✅ FI達成予測地点",
+                marker=dict(size=12, symbol="star", color="gold"),
+                hovertemplate="FI達成: %{x|%Y-%m}<br>%{y:,.0f} 円"
+            ))
+
+    # --- 3. 基準線（FIターゲットなど） ---
+    fig.add_hline(
+        y=fi_target_asset, 
+        line_dash="longdash", 
+        line_color="gray",
+        annotation_text="🏁 FI必要資産", 
+        annotation_position="top right"
+    )
+    
+    fig.add_hline(
+        y=ef_rec, 
+        line_dash="dot", 
+        line_color="green",
+        annotation_text="🛡️ 生活防衛費", 
+        annotation_position="bottom right"
+    )
+
+    # 現在を示す縦線
+    fig.add_vline(x=datetime.today(), line_width=1, line_color="black", annotation_text="現在", annotation_position="top left")
+
+    fig.update_layout(
+        title="📈 人生の羅針盤（過去の実績 → 未来の予測）",
+        xaxis_title="年月",
+        yaxis_title="金額（円）",
+        hovermode="x unified",
+        height=600,
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=1.02,
+            xanchor="right",
+            x=1
+        )
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+
+# ==================================================
+# UI Component Functions
+# ==================================================
+def ui_kpi_cards(bank_save, nisa_save, goals_save, free_cash, nisa_reason, ef_status, ef_ratio, ef_balance, ef_target):
     st.markdown("### 🗓️ 今月のミッション")
+    
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
-        st.metric("🏦 銀行へ", f"{int(bank_save):,} 円", help="【生活防衛費向け】不測の事態や、直近の大きな出費に備えるための現金貯蓄です。生活防衛費が推奨額に達するまではここが優先されます。")
+        st.metric("🏦 銀行へ", f"{int(bank_save):,} 円", help="生活防衛費のための積立。これが満タンになるまでは最優先。")
     with col2:
-        st.metric("📈 NISAへ", f"{int(nisa_save):,} 円", help=f"【老後・超長期向け】生活防衛費とGoals積立を満たした後の「余剰資金」のみがここに回ります。\n現在の判定理由: {nisa_reason}")
+        st.metric("📈 NISAへ", f"{int(nisa_save):,} 円", help=f"将来のための投資。\n理由: {nisa_reason}")
     with col3:
-        st.metric("🎯 Goals口座へ", f"{int(goals_save):,} 円", help="【将来の必須支出】iPhone買い替えや学費など、期限が決まっている支出のために取り分けておくお金です。")
+        st.metric("🎯 Goals口座へ", f"{int(goals_save):,} 円", help="iPhoneや学費など、使うための貯蓄。")
     with col4:
-        st.metric("🎉 自由費", f"{int(free_cash):,} 円", help="【趣味・娯楽】上記の積立を全て終えた後に残ったお金です。この金額の範囲内なら、何に使っても将来に影響しません。")
+        st.metric("🎉 自由費", f"{int(free_cash):,} 円", help="これ以上使っても将来に影響しません。")
+
+    # 生活防衛費の詳細ヘルプ
+    ef_help_text = f"""
+    【現在のステータス】
+    {ef_status}
+    
+    ・現在地: {int(ef_balance):,} 円
+    ・目標額: {int(ef_target):,} 円
+    
+    【判定ロジック】
+    過去の支出データから算出した「生活費の推奨ヶ月分」を目標としています。
+    まずはここを100%にすることを目指しましょう。
+    """
 
     if ef_ratio < 1.0:
-        st.warning(f"🛡️ 生活防衛費：あと {int((1.0-ef_ratio)*100)}% で安心ラインです")
+        st.warning(f"🛡️ 生活防衛費：あと {int((1.0-ef_ratio)*100)}% で安心ラインです", icon="🛡️")
     else:
-        st.success("🛡️ 生活防衛費：達成済み！素晴らしいです")
-
-def plot_combined_timeline(df_balance, df_fi_sim, fi_req):
-    # データを結合するための準備
-    fig = go.Figure()
-
-    # --- 1. 過去（実績） ---
-    if df_balance is not None and not df_balance.empty:
-        df_hist = df_balance.copy().sort_values("日付")
-        df_hist["total"] = df_hist["銀行残高"] + df_hist["NISA評価額"]
-        
-        fig.add_trace(go.Scatter(x=df_hist["日付"], y=df_hist["銀行残高"], name="🏦 実績：銀行", stackgroup='one', line=dict(width=0), fillcolor='rgba(0, 104, 201, 0.5)'))
-        fig.add_trace(go.Scatter(x=df_hist["日付"], y=df_hist["NISA評価額"], name="📈 実績：NISA", stackgroup='one', line=dict(width=0), fillcolor='rgba(255, 140, 0, 0.5)'))
-        fig.add_trace(go.Scatter(x=df_hist["日付"], y=df_hist["total"], name="💰 実績：合計", mode='lines', line=dict(color='blue', width=2)))
-
-    # --- 2. 未来（予測） ---
-    if df_fi_sim is not None and not df_fi_sim.empty:
-        # 予測線の色設定
-        fig.add_trace(go.Scatter(x=df_fi_sim["date"], y=df_fi_sim["total_real"], name="🔮 予測：総資産", line=dict(color='green', dash='dash')))
-        fig.add_trace(go.Scatter(x=df_fi_sim["date"], y=df_fi_sim["investable_real"], name="🛡️ 予測：投資可能資産", line=dict(color='orange', dash='dot')))
-        
-        # FIライン
-        fig.add_hline(y=fi_req, line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
-
-    # --- 3. 現在地（縦線） ---
-    today = datetime.today()
-    fig.add_vline(x=today, line_width=2, line_dash="dash", line_color="gray", annotation_text="現在")
-
-    fig.update_layout(
-        title="📈 資産の過去と未来（統合タイムライン）",
-        xaxis_title="日付",
-        yaxis_title="金額（円）",
-        hovermode="x unified",
-        height=500,
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
-    )
-    st.plotly_chart(fig, use_container_width=True)
-
-def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, show_ideal, goals_data, summary):
-    # ★統合グラフをタブの外（メイン）に配置
-    plot_combined_timeline(df_balance, df_fi_sim, fi_req)
-
-    tab1, tab2, tab3 = st.tabs(["🎯 Goals詳細", "🔮 FI詳細", "📝 データ内訳"])
+        st.success("🛡️ 生活防衛費：達成済み！素晴らしいです", icon="✅")
     
+    # 隠しヘルプ（アイコンクリック用）
+    st.caption("※ 各項目の「？」にカーソルを合わせると詳細が見れます")
+
+
+def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, goals_data, summary):
+    tab1, tab2, tab3 = st.tabs(["📊 資産 & 未来", "🎯 Goals詳細", "📝 データ内訳"])
+    
+    # --- Tab 1: 統合グラフ ---
     with tab1:
+        st.caption("凡例をクリックすると、表示/非表示を切り替えられます。")
+        plot_combined_financial_timeline(df_balance, df_fi_sim, fi_req, float(ef["fund_rec"]))
+        
+        # FI達成予定日などのサマリーを下に配置
+        fi_ok = df_fi_sim[df_fi_sim["fi_ok_real"] == True]
+        fi_date = fi_ok.iloc[0]["date"].strftime("%Y-%m") if not fi_ok.empty else "未達"
+        
+        c1, c2, c3 = st.columns(3)
+        c1.metric("🏁 FI達成予測", fi_date)
+        c1.metric("💰 FI必要資産", f"{int(fi_req):,} 円", help="年間支出 ÷ SWR(3.5%) で算出")
+        c2.metric("📈 現在SWR", f"{summary['current_total_asset'] / fi_req * 3.5:.2f} %" if fi_req > 0 else "—", help="小さいほど余裕があります")
+
+    # --- Tab 2: Goals詳細 ---
+    with tab2:
         st.subheader("Goals（必須）積立の進捗", help="対象：必須のみ / 今日から 5 年先まで")
-        # caption削除済み
         if df_goals_progress.empty:
             st.info("直近の必須Goalsはありません")
         else:
             for i, r in df_goals_progress.iterrows():
                 rate = r['achieved_rate']
-                st.write(f"**{r['name']}** (あと {int(r['remaining_amount']):,} 円)")
+                st.write(f"**{r['name']}** (残 {int(r['remaining_amount']):,} 円 / 期限 {r['deadline'].strftime('%Y-%m')})")
                 st.progress(min(rate, 1.0))
 
-    with tab2:
-        st.subheader("FIシミュレーション詳細")
-        fi_ok = df_fi_sim[df_fi_sim["fi_ok_real"] == True]
-        fi_date = fi_ok.iloc[0]["date"].strftime("%Y-%m") if not fi_ok.empty else "未達"
-        st.metric("🏁 FI達成予測", fi_date)
-        # 詳細なFIチャートが見たい場合はここにも残しておく（オプション）
-        plot_fi_simulation(df_fi_sim, fi_req, show_ideal, "fi_chart_detail")
-
+    # --- Tab 3: 生データ ---
     with tab3:
         st.write("#### 収支内訳")
         st.json(summary)
-        st.write("#### Goals積立詳細")
+        st.write("#### 今月のGoals積立詳細")
         if goals_data is not None:
             st.dataframe(goals_data)
 
@@ -524,21 +606,25 @@ def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, show_idea
 def main():
     st.title("💰 My Financial Pilot")
     
+    # Data Load
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
     today = datetime.today()
 
+    # Parameters
     goals_horizon = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
     swr = to_float_safe(get_latest_parameter(df_params, "SWR", today), default=0.035)
     end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     cur_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=21.0)
     roi = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
 
+    # Calculations
     summary = calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
     ef = estimate_emergency_fund(df_params, df_fix, df_forms, today)
     
+    # Goals Logic
     bank_bal = float(summary["current_bank"])
     ef_not_met = bank_bal < float(ef["fund_rec"])
     
@@ -547,6 +633,7 @@ def main():
     df_goals_prog = allocate_goals_progress(df_goals_norm, goals_cum)
     goals_plan, df_goals_detail = compute_goals_monthly_plan(df_goals_prog, today, ef_not_met)
 
+    # NISA Logic
     avail_cash = float(summary["available_cash"])
     avail_after_goals = max(avail_cash - goals_plan, 0.0)
     
@@ -567,7 +654,8 @@ def main():
     bank_plan = max(avail_after_goals - nisa_plan, 0.0)
     free_cash = max(avail_cash - goals_plan - bank_plan - nisa_plan, 0.0)
 
-    fi_req = compute_fi_required_asset(350000, swr)
+    # FI Simulation
+    fi_req = compute_fi_required_asset(350000, swr) 
     real_pmt = max(estimate_realistic_monthly_contribution(df_balance), bank_plan + nisa_plan + goals_plan)
     
     total_plan = bank_plan + nisa_plan + goals_plan
@@ -592,16 +680,16 @@ def main():
     )
 
     # UI Rendering
+    # 生活防衛費のステータス文字列作成
     ef_rec_val = float(ef["fund_rec"])
     ef_min_val = float(ef["fund_min"])
-    if bank_bal >= ef_rec_val: ef_status = "✅"
-    elif bank_bal >= ef_min_val: ef_status = "⚠️"
-    else: ef_status = "🚨"
-    
+    if bank_bal >= ef_rec_val: ef_st = "✅ 推奨額 達成済"
+    elif bank_bal >= ef_min_val: ef_st = "⚠️ 最低額はクリア"
+    else: ef_st = "🚨 危険水域"
     ef_ratio = 0.0 if ef_rec_val <= 0 else min(bank_bal / ef_rec_val, 1.0)
 
-    ui_kpi_cards(bank_plan, nisa_plan, goals_plan, free_cash, nisa_reason, ef_status, ef_ratio)
-    ui_main_tabs(df_balance, ef, df_goals_prog, df_fi, fi_req, False, df_goals_detail, summary)
+    ui_kpi_cards(bank_plan, nisa_plan, goals_plan, free_cash, nisa_reason, ef_st, ef_ratio, bank_bal, ef_rec_val)
+    ui_main_tabs(df_balance, ef, df_goals_prog, df_fi, fi_req, df_goals_detail, summary)
 
 if __name__ == "__main__":
     main()
