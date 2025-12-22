@@ -513,6 +513,7 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
+# ★この関数が抜けていたためエラーになっていました
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met):
     """
     収入の範囲内で、NISA・銀行・Goalsに優先順位をつけて配分する
