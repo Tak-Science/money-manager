@@ -134,7 +134,7 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
 
 # ==================================================
-# 計算・ロジック関数群
+# 計算・ロジック関数群（ここが抜けていました！）
 # ==================================================
 def get_latest_parameter(df, item, target_date):
     if df is None or df.empty: return None
@@ -331,6 +331,114 @@ def goals_log_cumulative(df_log):
     return float(pd.to_numeric(df_log["積立額"], errors="coerce").fillna(0).sum())
 
 # ==================================================
+# 分析・判定ロジック (Missing Parts Restored)
+# ==================================================
+def analyze_deficit(monthly_income, fix_cost, variable_cost):
+    total_deficit = (fix_cost + variable_cost) - monthly_income
+    if total_deficit <= 0: return None
+    variable_expected = monthly_income * 0.3
+    fix_over = max(fix_cost - monthly_income, 0.0)
+    var_over = max(variable_cost - variable_expected, 0.0)
+    return {
+        "total_deficit": float(total_deficit),
+        "fix_over": float(fix_over),
+        "var_over": float(var_over),
+        "var_expected": float(variable_expected),
+        "var_actual": float(variable_cost),
+    }
+
+def analyze_memo_frequency_advanced(df_forms, today, is_deficit, variable_cost, monthly_income, top_n=5):
+    variable_expected = monthly_income * 0.3
+    if (not is_deficit) and (variable_cost <= variable_expected): return []
+    if df_forms is None or df_forms.empty or not {"日付", "金額", "満足度", "メモ"}.issubset(set(df_forms.columns)): return []
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    target = d[(d["month"] == current_month) & (d["満足度"] <= 2) & (d["メモ"].notna())]
+    if target.empty: return []
+    memo_stats = defaultdict(lambda: {"count": 0, "amount": 0.0})
+    for _, row in target.iterrows():
+        words = re.findall(r"[一-龥ぁ-んァ-ンA-Za-z0-9]+", str(row["メモ"]))
+        for w in words:
+            memo_stats[w]["count"] += 1
+            memo_stats[w]["amount"] += float(row["金額"])
+    result = [(word, v["count"], v["amount"]) for word, v in memo_stats.items()]
+    result.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    return result[:top_n]
+
+def analyze_memo_by_category(df_forms, today, is_deficit, variable_cost, monthly_income):
+    variable_expected = monthly_income * 0.3
+    if (not is_deficit) and (variable_cost <= variable_expected): return {}
+    if df_forms is None or df_forms.empty: return {}
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    target = d[(d["month"] == current_month) & (d["満足度"] <= 2) & (d["メモ"].notna())]
+    if target.empty: return {}
+    result = {}
+    for _, row in target.iterrows():
+        category = row["費目"]
+        memo = row["メモ"]
+        result.setdefault(category, {})
+        result[category].setdefault(memo, {"count": 0, "amount": 0.0})
+        result[category][memo]["count"] += 1
+        result[category][memo]["amount"] += float(row["金額"])
+    return result
+
+def analyze_category_trend_3m(df_forms, today):
+    if df_forms is None or df_forms.empty: return []
+    d = df_forms.copy()
+    d = d[d["費目"].isin(EXPENSE_CATEGORIES)]
+    d["month"] = d["日付"].dt.to_period("M").astype(str)
+    current_month = today.strftime("%Y-%m")
+    months = pd.period_range(end=pd.Period(current_month, freq="M"), periods=4, freq="M").astype(str)
+    d = d[d["month"].isin(months)]
+    if d.empty: return []
+    pivot = d.groupby(["month", "費目"], as_index=False)["金額"].sum().pivot(index="費目", columns="month", values="金額").fillna(0)
+    if current_month not in pivot.columns: return []
+    past_months = [m for m in pivot.columns if m != current_month]
+    if not past_months: return []
+    pivot["past_3m_avg"] = pivot[past_months].mean(axis=1)
+    pivot["diff"] = pivot[current_month] - pivot["past_3m_avg"]
+    increased = pivot[pivot["diff"] > 0].sort_values("diff", ascending=False)
+    result = []
+    for category, row in increased.iterrows():
+        result.append({"category": category, "current": float(row[current_month]), "past_avg": float(row["past_3m_avg"]), "diff": float(row["diff"])})
+    return result
+
+# ==================================================
+# Summary Calculation
+# ==================================================
+def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
+    base_income = to_float_safe(get_latest_parameter(df_params, "月収", today), default=0.0)
+    variable_income = calculate_monthly_variable_income(df_forms, today)
+    monthly_income = base_income + variable_income
+    fix_cost = calculate_monthly_fix_cost(df_fix, today)
+    variable_cost = calculate_monthly_variable_cost(df_forms, today)
+    available_cash = max(monthly_income - fix_cost - variable_cost, 0.0)
+    current_total_asset = get_latest_total_asset(df_balance)
+    current_bank = get_latest_bank_balance(df_balance) or 0.0
+    current_nisa = get_latest_nisa_balance(df_balance) or 0.0
+    return {
+        "monthly_income": float(monthly_income),
+        "base_income": float(base_income),
+        "variable_income": float(variable_income),
+        "fix_cost": float(fix_cost),
+        "variable_cost": float(variable_cost),
+        "available_cash": float(available_cash),
+        "current_total_asset": float(current_total_asset),
+        "current_bank": float(current_bank),
+        "current_nisa": float(current_nisa),
+    }
+
+def compute_nisa_coefficient(*, available_cash_after_goals, emergency_not_met, emergency_is_danger, goals_shortfall):
+    if available_cash_after_goals <= 0: return 0.0, "赤字またはGoals後に余剰なし → NISA 0"
+    if goals_shortfall: return 0.0, "Goals積立が不足 → NISA 0"
+    if emergency_is_danger: return 0.0, "生活防衛費 危険ゾーン → NISA 0"
+    if emergency_not_met: return 0.0, "生活防衛費 未達 → NISA 0（2段階）"
+    return 1.0, "条件OK → NISA 100%"
+
+# ==================================================
 # FI Simulation
 # ==================================================
 def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
@@ -348,6 +456,34 @@ def apply_outflow_three_pockets(goals_fund, emergency_cash, nisa, outflow):
     used_nisa = min(nisa, remain2)
     nisa -= used_nisa
     return goals_fund, emergency_cash, nisa, used_goals, used_em, used_nisa, remain2 - used_nisa
+
+def estimate_realistic_monthly_contribution(df_balance, months=6):
+    if df_balance is None or df_balance.empty: return 0.0
+    df = df_balance.copy()
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
+    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce")
+    df = df.dropna(subset=["日付"]).sort_values("日付")
+    if df.empty or len(df) < 2: return 0.0
+    df["total"] = df["銀行残高"].fillna(0) + df["NISA評価額"].fillna(0)
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+    monthly_last = df.groupby("month", as_index=False)["total"].last()
+    monthly_last["diff"] = monthly_last["total"].diff()
+    diffs = monthly_last["diff"].dropna().tail(months)
+    if diffs.empty: return 0.0
+    return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+
+def compute_fi_required_asset(monthly_spend, swr_assumption):
+    annual = float(monthly_spend) * 12.0
+    swr = float(swr_assumption)
+    if swr <= 0: return float("inf")
+    return float(annual / swr)
+
+def compute_current_swr(monthly_spend, investable_asset):
+    annual = float(monthly_spend) * 12.0
+    a = float(investable_asset)
+    if a <= 0: return None
+    return float(annual / a)
 
 def simulate_fi_paths(today, current_age, end_age, annual_return, cur_em, cur_gf, cur_ni, monthly_em_real, monthly_gf_real, monthly_ni_real, fi_target, outflows, ef_rec):
     r = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
@@ -409,14 +545,7 @@ def ui_kpi_cards(bank_save, nisa_save, goals_save, free_cash, nisa_reason, ef_st
     with col1:
         st.metric("🏦 銀行へ", f"{int(bank_save):,} 円", help="生活防衛費のための積立。これが満タンになるまでは最優先。")
     with col2:
-        # NISA用helpテキスト
-        nisa_help = f"""
-        【判定根拠】
-        現在の判定: {nisa_reason}
-        
-        【ルール】
-        生活防衛費が不足、またはGoals積立で手一杯の場合は、NISAへの積立は0円になります。
-        """
+        nisa_help = f"【判定根拠】\n現在の判定: {nisa_reason}\n\n【ルール】\n生活防衛費が不足、またはGoals積立で手一杯の場合は、NISAへの積立は0円になります。"
         st.metric("📈 NISAへ", f"{int(nisa_save):,} 円", help=nisa_help)
     with col3:
         st.metric("🎯 Goals口座へ", f"{int(goals_save):,} 円", help="iPhoneや学費など、使うための貯蓄。")
@@ -428,7 +557,6 @@ def ui_kpi_cards(bank_save, nisa_save, goals_save, free_cash, nisa_reason, ef_st
     else:
         st.success("🛡️ 生活防衛費：達成済み！素晴らしいです")
 
-# ★統合版グラフ関数
 def plot_combined_simulation(df_balance, df_sim, ef_rec, fi_target):
     fig = go.Figure()
 
@@ -437,16 +565,12 @@ def plot_combined_simulation(df_balance, df_sim, ef_rec, fi_target):
         df_b = df_balance.dropna(subset=["日付"]).sort_values("日付")
         fig.add_trace(go.Scatter(x=df_b["日付"], y=df_b["銀行残高"], name="🏦 実績: 銀行", mode="lines"))
         fig.add_trace(go.Scatter(x=df_b["日付"], y=df_b["NISA評価額"], name="📈 実績: NISA", mode="lines"))
-        # 合計は太線で目立たせる
         fig.add_trace(go.Scatter(x=df_b["日付"], y=df_b["銀行残高"]+df_b["NISA評価額"], name="💰 実績: 合計(資産)", mode="lines", line=dict(width=3)))
 
     # --- 未来の予測データ ---
     if df_sim is not None and not df_sim.empty:
-        # 投資可能資産（これがFIの基準）
         fig.add_trace(go.Scatter(x=df_sim["date"], y=df_sim["investable_real"], name="🔮 予測: 投資可能資産", mode="lines", line=dict(dash="dash", color="blue")))
-        # Goalsを含めた総資産（凡例をクリックしないと見えないようにする＝スッキリさせる）
         fig.add_trace(go.Scatter(x=df_sim["date"], y=df_sim["total_real"], name="📦 予測: 総資産(Goals含)", mode="lines", line=dict(dash="dot", color="gray"), visible='legendonly'))
-        # 理想ライン（凡例をクリックしないと見えない）
         fig.add_trace(go.Scatter(x=df_sim["date"], y=df_sim["investable_ideal"], name="🎯 理想ライン", mode="lines", line=dict(dash="dash", color="green"), visible='legendonly'))
 
     # --- 基準線 ---
@@ -459,13 +583,7 @@ def plot_combined_simulation(df_balance, df_sim, ef_rec, fi_target):
         yaxis_title="金額（円）",
         hovermode="x unified",
         height=500,
-        legend=dict(
-            orientation="h",
-            yanchor="bottom",
-            y=1.02,
-            xanchor="right",
-            x=1
-        )
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
     )
     st.plotly_chart(fig, use_container_width=True)
 
@@ -477,53 +595,62 @@ def plot_goal_pie(title, achieved, total, key=None):
     fig.update_layout(title=title, height=250, margin=dict(l=10, r=10, t=30, b=10), showlegend=False)
     st.plotly_chart(fig, use_container_width=True, key=key)
 
-def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, show_ideal, goals_data, summary):
+def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, show_ideal, goals_data, summary, memo_analysis, trend_analysis):
     tab1, tab2 = st.tabs(["📊 資産 & 将来", "📝 収支・詳細データ"])
     
-    # --- Tab 1: 統合されたメイン画面 ---
     with tab1:
-        # 上段：統合グラフ
         plot_combined_simulation(df_balance, df_fi_sim, float(ef["fund_rec"]), fi_req)
         
-        # 下段：Goals進捗
         st.markdown("#### 🎯 直近のGoals進捗")
         if df_goals_progress.empty:
             st.info("現在、積立中の必須Goalsはありません")
         else:
-            # カラムで並べる
             cols = st.columns(len(df_goals_progress) if len(df_goals_progress) <= 3 else 3)
             for i, r in df_goals_progress.iterrows():
-                # 3つ以上ある場合は折り返し（簡易実装として3つまで表示、あとはリストにするなどの工夫も可）
                 col_idx = i % 3
                 with cols[col_idx]:
                     plot_goal_pie(f"{r['name']}", float(r["achieved_amount"]), float(r["amount"]), key=f"pie_{i}")
                     st.caption(f"あと {int(r['remaining_amount']):,} 円")
 
-        # FI達成予定の簡易表示
         fi_ok = df_fi_sim[df_fi_sim["fi_ok_real"] == True]
         fi_date = fi_ok.iloc[0]["date"].strftime("%Y-%m") if not fi_ok.empty else "未達"
         st.caption(f"🏁 現在のペースでのFI達成予測: **{fi_date}** （FI必要資産: {int(fi_req):,} 円）")
 
-    # --- Tab 2: 詳細データ ---
     with tab2:
         st.subheader("今月の収支内訳")
         c1, c2 = st.columns(2)
         with c1:
             st.write("収入")
-            st.write(f"月収: {int(summary['monthly_income']):,} 円")
+            st.metric("月収", f"{int(summary['monthly_income']):,} 円")
         with c2:
             st.write("支出")
             st.write(f"固定費: {int(summary['fix_cost']):,} 円")
             st.write(f"変動費: {int(summary['variable_cost']):,} 円")
         
+        # 赤字分析
+        deficit = analyze_deficit(summary["monthly_income"], summary["fix_cost"], summary["variable_cost"])
+        if deficit:
+            st.error(f"⚠️ 今月は {int(deficit['total_deficit']):,} 円の赤字です")
+        
         st.markdown("---")
-        st.write("#### 📝 メモ分析（無駄遣いチェック）")
-        # メモ分析ロジックはMainで呼び出して渡す形が良いが、ここでは簡易的に再計算またはMainから渡す設計にする
-        # 今回はMain関数内で計算済みなので、UI関数引数を増やすよりMain側で表示制御する方が綺麗だが、
-        # 既存コードとの整合性のため、ここではプレースホルダー的に留めるか、引数を追加する。
-        # -> Main側で表示することにします。
+        c3, c4 = st.columns(2)
+        with c3:
+            st.write("#### 📝 メモ分析（無駄遣いチェック）")
+            if memo_analysis:
+                for w, c, a in memo_analysis:
+                    st.write(f"- {w}: {c}回 ({int(a):,}円)")
+            else:
+                st.info("気になる出費はありません")
+        
+        with c4:
+            st.write("#### 📈 トレンド（最近増えた費目）")
+            if trend_analysis:
+                for item in trend_analysis:
+                    st.write(f"- {item['category']}: +{int(item['diff']):,} 円")
+            else:
+                st.info("急増した費目はありません")
 
-        st.write("#### 📊 データソース確認")
+        st.markdown("---")
         with st.expander("Goals積立詳細データ"):
             if goals_data is not None:
                 st.dataframe(goals_data)
@@ -534,25 +661,21 @@ def ui_main_tabs(df_balance, ef, df_goals_progress, df_fi_sim, fi_req, show_idea
 def main():
     st.title("💰 My Financial Pilot")
     
-    # Data Load
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
     today = datetime.today()
 
-    # Parameters
     goals_horizon = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
     swr = to_float_safe(get_latest_parameter(df_params, "SWR", today), default=0.035)
     end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     cur_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=21.0)
     roi = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
 
-    # Calculations
     summary = calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
     ef = estimate_emergency_fund(df_params, df_fix, df_forms, today)
     
-    # Goals Logic
     bank_bal = float(summary["current_bank"])
     ef_not_met = bank_bal < float(ef["fund_rec"])
     
@@ -561,7 +684,6 @@ def main():
     df_goals_prog = allocate_goals_progress(df_goals_norm, goals_cum)
     goals_plan, df_goals_detail = compute_goals_monthly_plan(df_goals_prog, today, ef_not_met)
 
-    # NISA Logic
     avail_cash = float(summary["available_cash"])
     avail_after_goals = max(avail_cash - goals_plan, 0.0)
     
@@ -582,7 +704,6 @@ def main():
     bank_plan = max(avail_after_goals - nisa_plan, 0.0)
     free_cash = max(avail_cash - goals_plan - bank_plan - nisa_plan, 0.0)
 
-    # FI Simulation
     fi_req = compute_fi_required_asset(350000, swr) 
     real_pmt = max(estimate_realistic_monthly_contribution(df_balance), bank_plan + nisa_plan + goals_plan)
     
@@ -607,16 +728,12 @@ def main():
         ef_rec=float(ef["fund_rec"])
     )
 
-    # UI Rendering
-    ui_kpi_cards(bank_plan, nisa_plan, goals_plan, free_cash, nisa_reason, "", 0.0) 
-    ui_main_tabs(df_balance, ef, df_goals_prog, df_fi, fi_req, False, df_goals_detail, summary)
+    # 追加分析（Mainで実行してUIに渡す）
+    memo_analysis = analyze_memo_frequency_advanced(df_forms, today, (summary["available_cash"] < 0), summary["variable_cost"], summary["monthly_income"])
+    trend_analysis = analyze_category_trend_3m(df_forms, today)
 
-    # メモ分析（Tabの外に配置またはTab2へ移動も可）
-    memo = analyze_memo_frequency_advanced(df_forms, today, (summary["available_cash"] < 0), summary["variable_cost"], summary["monthly_income"])
-    if memo:
-        with st.expander("今月の要チェック出費"):
-            for w, c, a in memo:
-                st.write(f"- {w}: {c}回 ({int(a):,}円)")
+    ui_kpi_cards(bank_plan, nisa_plan, goals_plan, free_cash, nisa_reason, "", 0.0) 
+    ui_main_tabs(df_balance, ef, df_goals_prog, df_fi, fi_req, False, df_goals_detail, summary, memo_analysis, trend_analysis)
 
 if __name__ == "__main__":
     main()
