@@ -173,25 +173,28 @@ def main():
 
     df_goals_progress = lg.allocate_goals_progress(df_goals_norm, actual_goals_cum)
 
-    goals_save_plan, df_goals_plan_detail = lg.compute_goals_monthly_plan(
+    # 理想額の計算（学生モード係数適用済み）
+    goals_save_plan_ideal, df_goals_plan_detail = lg.compute_goals_monthly_plan(
         df_goals_progress, today,
         emergency_not_met=emergency_not_met
     )
 
+    # ★変更：現実的な配分計算（Logic V2）
     available_cash = float(summary["available_cash"])
-    available_after_goals = max(available_cash - float(goals_save_plan), 0.0)
-    goals_shortfall = available_cash < float(goals_save_plan)
-
-    nisa_coef, nisa_reason = lg.compute_nisa_coefficient(
-        available_cash_after_goals=available_after_goals,
-        emergency_not_met=emergency_not_met,
-        emergency_is_danger=emergency_is_danger,
-        goals_shortfall=goals_shortfall,
+    
+    allocation = lg.allocate_monthly_budget(
+        available_cash=available_cash,
+        df_goals_plan_detail=df_goals_plan_detail, # 詳細を渡して優先順位付けさせる
+        emergency_not_met=emergency_not_met
     )
 
-    nisa_save = float(available_after_goals * nisa_coef)
-    bank_save = float(max(available_after_goals - nisa_save, 0.0))
-    free_cash = float(max(available_cash - goals_save_plan - bank_save - nisa_save, 0.0))
+    nisa_save = allocation["nisa_save"]
+    bank_save = allocation["bank_save"]
+    goals_save_actual = allocation["goals_save"]
+    goals_shortfall = allocation["goals_shortfall"]
+    goals_ideal_total = allocation["ideal_goals_total"]
+    
+    free_cash = max(available_cash - nisa_save - bank_save - goals_save_actual, 0.0)
 
     # ==================================================
     # KPI表示
@@ -201,36 +204,39 @@ def main():
     
     k1.metric(
         "🏦 銀行積立", 
-        f"{int(bank_save):,} 円",
-        help="【生活防衛費向け】不測の事態や、直近の大きな出費に備えるための現金貯蓄です。生活防衛費が推奨額に達するまではここが優先されます。"
+        f"{bank_save:,} 円",
+        help=f"最低確保額（{config.MIN_BANK_AMOUNT:,}円）を含みます。"
     )
-    
-    nisa_help_text = f"""
-    【判定根拠】
-    現在の判定: {nisa_reason}
-    
-    【ルール】
-    生活防衛費が不足、またはGoals積立で手一杯の場合は、NISAへの積立は0円になります。
-    余剰資金がある場合のみ投資に回ります。
-    """
     
     k2.metric(
         "📈 NISA積立", 
-        f"{int(nisa_save):,} 円",
-        help=nisa_help_text
+        f"{nisa_save:,} 円",
+        help=f"最低確保額（{config.MIN_NISA_AMOUNT:,}円）を含みます。まずはここを死守します。"
     )
     
     k3.metric(
-        "🎯 Goals積立", 
-        f"{int(goals_save_plan):,} 円",
-        help="【将来の必須支出】iPhone買い替えや学費など、期限が決まっている支出のために取り分けておくお金です。これを確保しないと将来困ります。"
+        "🎯 Goals積立（実績）", 
+        f"{goals_save_actual:,} 円",
+        delta=f"-{goals_shortfall:,} 円 (繰越)" if goals_shortfall > 0 else "Plan OK",
+        delta_color="off", 
+        help=f"理想額：{goals_ideal_total:,} 円\n\n今の収入で払える分だけを、期限が近いGoals（博士1年目など）から優先して埋めています。不足分は将来回収します。"
     )
     
     k4.metric(
-        "🎉 自由に使えるお金", 
+        "🎉 今月の余力", 
         f"{int(free_cash):,} 円",
-        help="【趣味・娯楽】上記の積立を全て終えた後に残ったお金です。この金額の範囲内なら、何に使っても将来に影響しません。楽しんで！"
+        help="配分計算後の端数などです。"
     )
+
+    # ★追加：稼ぐ目標額の目安（独り言）
+    # 理想を達成するための「手取り目安」 = 固定費 + 変動費 + 聖域 + Goals理想
+    target_income_ideal = float(summary["fix_cost"]) + float(summary["variable_cost"]) + float(config.MIN_NISA_AMOUNT + config.MIN_BANK_AMOUNT) + float(goals_ideal_total)
+    shortage_for_ideal = max(target_income_ideal - float(summary["monthly_income"]), 0)
+
+    if shortage_for_ideal > 0:
+        st.caption(f"💭 あと {int(shortage_for_ideal):,} 円稼げば、全てのGoalsを理想通りに進められます（目安月収：{int(target_income_ideal):,} 円）")
+    else:
+        st.caption("✨ 今月の収入で、理想的な積立ペースをクリアできています！")
 
     s1, s2 = st.columns(2)
 
@@ -264,14 +270,15 @@ def main():
     )
     s1.progress(ef_ratio)
 
-    if goals_save_plan <= 0:
+    if goals_ideal_total <= 0:
         s2.metric("🎯 Goals積立達成率（当月）", "—")
         s2.caption("今月、積立対象の必須Goalsがありません。")
     else:
-        goals_month_ratio = min(float(actual_goals_pmt_month) / float(goals_save_plan), 1.0) if goals_save_plan > 0 else 0.0
+        # 理想に対する達成率
+        goals_month_ratio = min(float(goals_save_actual) / float(goals_ideal_total), 1.0)
         s2.metric("🎯 Goals積立達成率（当月）", f"{int(goals_month_ratio*100)} %")
         s2.progress(goals_month_ratio)
-        s2.caption(f"当月実績：{int(actual_goals_pmt_month):,} 円 / 計画：{int(goals_save_plan):,} 円")
+        s2.caption(f"現実：{int(goals_save_actual):,} 円 / 理想：{int(goals_ideal_total):,} 円")
 
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
@@ -445,11 +452,11 @@ def main():
     
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
 
-    plan_total = float(bank_save + nisa_save + goals_save_plan)
+    plan_total = float(bank_save + nisa_save + goals_save_actual)
     if plan_total > 0:
         share_bank = bank_save / plan_total
         share_nisa = nisa_save / plan_total
-        share_goals = goals_save_plan / plan_total
+        share_goals = goals_save_actual / plan_total
     else:
         share_bank = share_nisa = share_goals = 1.0 / 3.0
 
