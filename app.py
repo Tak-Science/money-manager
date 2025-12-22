@@ -38,6 +38,7 @@ DIST_COEF = {
 STATE_COEF_EMERGENCY_NOT_MET = 1.2
 
 # KPI / 表示向け
+# ★修正：衣料品・特別費 を追加（Forms_Log の変動費に反映されるように）
 EXPENSE_CATEGORIES = [
     "食費（外食・交際）",
     "食費（日常）",
@@ -45,6 +46,8 @@ EXPENSE_CATEGORIES = [
     "研究・書籍",
     "日用品",
     "交通費",
+    "衣料品",
+    "特別費",
     "その他",
 ]
 INCOME_CATEGORIES = ["給与・バイト代", "臨時収入"]
@@ -80,7 +83,7 @@ def load_data():
     df_forms   = get_df("Forms_Log",       "A:G")
     df_balance = get_df("Balance_Log",     "A:C")
     df_goals   = get_df("Goals",           "A:F")
-    df_goals_log = get_df("Goals_Save_Log","A:D")  # ★追加：月1回の実績入力
+    df_goals_log = get_df("Goals_Save_Log","A:D")  # 月1回の実績入力
 
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
 
@@ -112,6 +115,10 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
         if "満足度" in df_forms.columns:
             df_forms["満足度"] = pd.to_numeric(df_forms["満足度"], errors="coerce")
 
+        # ★修正：費目の表記揺れ（前後スペース）を除去して、カテゴリ一致漏れを防ぐ
+        if "費目" in df_forms.columns:
+            df_forms["費目"] = df_forms["費目"].astype(str).str.strip()
+
     # Balance_Log
     if not df_balance.empty:
         if "日付" in df_balance.columns:
@@ -130,10 +137,7 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
 
     # Goals_Save_Log（実績）
     if df_goals_log is not None and (not df_goals_log.empty):
-        # 想定列：月 / 積立額 / メモ / 任意
-        # "月" が YYYY-MM or 日付でもOKにする
         if "月" in df_goals_log.columns:
-            # 月が "2025-01" のような場合は 1日付与
             def parse_month(x):
                 s = str(x).strip()
                 if re.match(r"^\d{4}-\d{2}$", s):
@@ -478,14 +482,12 @@ def convert_to_jpy_stub(amount, currency, date=None):
     c = str(currency).strip().upper() if currency is not None else "JPY"
     if c in ("JPY", ""):
         return a
-    # TODO: 将来FX対応
     return a
 
 # ==================================================
 # Goals：距離分類
 # ==================================================
 def months_until(today, deadline):
-    """deadline までの残り月数（最低1）。月単位（Period）で算出。"""
     if pd.isna(deadline):
         return 1
     t = pd.Period(pd.to_datetime(today), freq="M")
@@ -506,11 +508,6 @@ def classify_distance_bucket(today, deadline):
 # Goals：イベント化（支出/目標）
 # ==================================================
 def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
-    """
-    Goals シートから「月次イベント」を返す。
-    - 支出: outflows_by_month[YYYY-MM] = list of {"name","amount","priority","deadline","bucket"}
-    - 目標: targets_by_month[YYYY-MM]  = list of {"name","amount","priority","deadline","bucket"}
-    """
     if df_goals is None or df_goals.empty:
         return {}, {}, pd.DataFrame()
 
@@ -526,7 +523,6 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
     if df.empty:
         return {}, {}, pd.DataFrame()
 
-    # horizon: 今日〜N年先までを対象（デフォルト 5年）
     horizon_dt = pd.to_datetime(today).normalize() + pd.DateOffset(years=int(max(horizon_years, 1)))
     df = df[(df["達成期限"] >= pd.to_datetime(today).normalize()) & (df["達成期限"] <= horizon_dt)]
 
@@ -576,10 +572,8 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
 # Goals：実績（Goals_Save_Log）集計
 # ==================================================
 def goals_log_monthly_actual(df_goals_log, today):
-    """当月の実績（Goals_Save_Log）"""
     if df_goals_log is None or df_goals_log.empty:
         return 0.0
-
     if "月_dt" not in df_goals_log.columns:
         return 0.0
 
@@ -593,7 +587,6 @@ def goals_log_monthly_actual(df_goals_log, today):
     return float(d["積立額"].sum())
 
 def goals_log_cumulative(df_goals_log):
-    """累積実績（Goals_Save_Log）"""
     if df_goals_log is None or df_goals_log.empty:
         return 0.0
     if "積立額" not in df_goals_log.columns:
@@ -604,20 +597,14 @@ def goals_log_cumulative(df_goals_log):
 # Goals：累積実績を「近→中→長」順に割当して、各Goal達成率を出す
 # ==================================================
 def allocate_goals_progress(df_goals_norm, total_saved):
-    """
-    df_goals_norm: normalize済み（type, month, deadline, bucket, amount, name, priority）
-    total_saved: Goals_Save_Log の累積
-    """
     if df_goals_norm is None or df_goals_norm.empty:
         return pd.DataFrame()
 
     d = df_goals_norm.copy()
-    # 「支出」は貯める対象ではなく支払いイベントなので、進捗は「目標」側だけで見る
     d = d[d["type"] != "支出"].copy()
     if d.empty:
         return pd.DataFrame()
 
-    # 近→中→長、次に期限が近い順
     bucket_order = {"near": 0, "mid": 1, "long": 2}
     d["bucket_order"] = d["bucket"].map(lambda x: bucket_order.get(str(x), 9))
     d = d.sort_values(["bucket_order", "deadline", "name"])
@@ -640,15 +627,6 @@ def allocate_goals_progress(df_goals_norm, total_saved):
 # Goals：今月の「必要積立（案A）」を算出
 # ==================================================
 def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
-    """
-    近/中/遠の距離係数 + 状態係数（防衛費未達のみ1.2）で、
-    今月のGoals積立を計算する（必須のみが入っている前提）。
-
-    設計：
-    - まず各Goalの「残額/残月数」を最低ラインとする
-    - 距離係数は “上乗せの効き方” にだけ使い、最低ラインは割らない
-      plan = min_pmt * (1 + (state-1)*distance_coeff)
-    """
     if df_goals_progress is None or df_goals_progress.empty:
         return 0.0, pd.DataFrame()
 
@@ -706,13 +684,6 @@ def compute_nisa_coefficient(
     emergency_is_danger,
     goals_shortfall,
 ):
-    """
-    2段階（オン/オフ）を基本に：
-    - 赤字 or Goals積立を満たせないなら 0
-    - 生活防衛費が危険ゾーンなら 0
-    - 防衛費未達なら 0（オン/オフの2段階）
-    - それ以外 1
-    """
     if available_cash_after_goals <= 0:
         return 0.0, "赤字またはGoals後に余剰なし → NISA 0"
     if goals_shortfall:
@@ -792,10 +763,6 @@ def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     return max(float(pmt), 0.0)
 
 def apply_outflow_three_pockets(goals_fund, emergency_cash, nisa, outflow):
-    """
-    支出を Goals_fund → emergency_cash → NISA の順で支払う
-    戻り値：goals_fund, emergency_cash, nisa, used_goals, used_emergency, used_nisa, unpaid
-    """
     goals_fund = float(goals_fund)
     emergency_cash = float(emergency_cash)
     nisa = float(nisa)
@@ -816,7 +783,6 @@ def apply_outflow_three_pockets(goals_fund, emergency_cash, nisa, outflow):
     return goals_fund, emergency_cash, nisa, used_goals, used_em, used_nisa, unpaid
 
 def estimate_realistic_monthly_contribution(df_balance, months=6):
-    """合計資産（銀行+NISA）の月次増分平均（プラスのみ）"""
     if df_balance is None or df_balance.empty:
         return 0.0
 
@@ -847,28 +813,21 @@ def simulate_fi_paths(
     current_age,
     end_age,
     annual_return,
-    # 現在の3ポケット
     current_emergency_cash,
     current_goals_fund,
     current_nisa,
-    # 現実：月次積立（3つ）
     monthly_emergency_save_real,
     monthly_goals_save_real,
     monthly_nisa_save_real,
-    # 理想：FI達成へ必要な月次積立（investableのみ）
     fi_target_asset,
-    # Goals outflows
     outflows_by_month,
-    # 生活防衛費の推奨
     ef_rec,
 ):
-    # 月利
     r = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
 
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
-    # 理想：investable（emergency + nisa）で FI target 到達のためのPMT逆算
     pv_investable = float(current_emergency_cash) + float(current_nisa)
     ideal_pmt_investable = solve_required_monthly_pmt(
         pv=pv_investable,
@@ -877,11 +836,8 @@ def simulate_fi_paths(
         n_months=months_left
     )
 
-    # 理想の配分：基本は NISA 80% へ（ただし安全資金も意識）
-    # ※ここは将来 Parameters で可変にしてもOK
     ideal_nisa_ratio = 0.8
 
-    # 初期
     em = float(current_emergency_cash)
     gf = float(current_goals_fund)
     ni = float(current_nisa)
@@ -894,7 +850,6 @@ def simulate_fi_paths(
     for i, dt in enumerate(dates):
         month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
 
-        # --- 今月の支出イベント（必須支出）
         items = outflows_by_month.get(month_key, [])
         outflow = float(sum(x["amount"] for x in items)) if items else 0.0
         outflow_name = ""
@@ -902,24 +857,20 @@ def simulate_fi_paths(
             names = [x["name"] for x in items]
             outflow_name = " / ".join(names[:3]) + (" …" if len(names) > 3 else "")
 
-        # 支出を適用（現実）
         unpaid_real = 0.0
         if outflow > 0:
-            gf, em, ni, used_g, used_e, used_n, unpaid_real = apply_outflow_three_pockets(gf, em, ni, outflow)
+            gf, em, ni, _, _, _, unpaid_real = apply_outflow_three_pockets(gf, em, ni, outflow)
 
-        # 支出を適用（理想）
         unpaid_ideal = 0.0
         if outflow > 0:
-            gf_i, em_i, ni_i, used_g2, used_e2, used_n2, unpaid_ideal = apply_outflow_three_pockets(gf_i, em_i, ni_i, outflow)
+            gf_i, em_i, ni_i, _, _, _, unpaid_ideal = apply_outflow_three_pockets(gf_i, em_i, ni_i, outflow)
 
-        # 資産
         total_real = gf + em + ni
         investable_real = em + ni
 
         total_ideal = gf_i + em_i + ni_i
         investable_ideal = em_i + ni_i
 
-        # FI達成判定（安全条件：推奨防衛費を満たしつつ investable が到達）
         fi_ok_real = (investable_real >= float(fi_target_asset)) and (em >= float(ef_rec))
         fi_ok_ideal = (investable_ideal >= float(fi_target_asset)) and (em_i >= float(ef_rec))
 
@@ -951,16 +902,12 @@ def simulate_fi_paths(
         if i == len(dates) - 1:
             break
 
-        # --- 次月へ（現実）
         em = em + float(monthly_emergency_save_real)
         gf = gf + float(monthly_goals_save_real)
         ni = (ni + float(monthly_nisa_save_real)) * (1 + r)
 
-        # --- 次月へ（理想）
-        # Goalsは「現実と同じだけは積む」前提（必須支払いの安定性優先）
         gf_i = gf_i + float(monthly_goals_save_real)
 
-        # investable の理想PMT
         add_nisa = float(ideal_pmt_investable) * float(ideal_nisa_ratio)
         add_em = float(ideal_pmt_investable) * (1.0 - float(ideal_nisa_ratio))
 
@@ -981,7 +928,6 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
 
     fig = go.Figure()
 
-    # 現実：investable
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["investable_real"],
         mode="lines",
@@ -989,7 +935,6 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
         hovertemplate="日付: %{x|%Y-%m}<br>投資可能資産: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # 現実：合計（参考）
     fig.add_trace(go.Scatter(
         x=df["date"], y=df["total_real"],
         mode="lines",
@@ -999,7 +944,6 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
         hovertemplate="日付: %{x|%Y-%m}<br>合計: %{y:,.0f} 円<extra></extra>"
     ))
 
-    # FI必要資産ライン
     fig.add_hline(
         y=float(fi_target_asset),
         line_dash="dash",
@@ -1007,7 +951,6 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
         annotation_position="top left",
     )
 
-    # 理想ライン（トグル表示）
     if show_ideal and "investable_ideal" in df.columns:
         fig.add_trace(go.Scatter(
             x=df["date"], y=df["investable_ideal"],
@@ -1017,7 +960,6 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
             hovertemplate="日付: %{x|%Y-%m}<br>理想 投資可能: %{y:,.0f} 円<extra></extra>"
         ))
 
-    # FI達成点（最初の1回だけ小さくマーク）
     ok = df[df["fi_ok_real"] == True].copy()
     if not ok.empty:
         first = ok.iloc[0]
@@ -1067,27 +1009,20 @@ def plot_goal_pie(title, achieved, total, key=None):
 def main():
     st.title("💰 今月サマリー")
 
-    # --- データ
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
     today = datetime.today()
 
-    # --- Parameters（追加分）
-    # Goals積立の対象年数（デフォルト5）
     goals_horizon_years = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
-    # SWR（デフォルト3.5%）
     swr_assumption = to_float_safe(get_latest_parameter(df_params, "SWR", today), default=0.035)
-    # 年齢（retire=「何歳まで働くか」）
     end_age = to_float_safe(get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     current_age = to_float_safe(get_latest_parameter(df_params, "現在年齢", today), default=20.0)
     annual_return = to_float_safe(get_latest_parameter(df_params, "投資年利", today), default=0.05)
 
-    # --- 今月収支
     summary = calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
 
-    # --- 生活防衛費
     ef = estimate_emergency_fund(df_params, df_fix, df_forms, today)
     bank_balance = float(summary["current_bank"])
     nisa_balance = float(summary["current_nisa"])
@@ -1095,32 +1030,26 @@ def main():
     emergency_is_danger = bank_balance < float(ef["fund_min"])
     emergency_not_met = bank_balance < float(ef["fund_rec"])
 
-    # --- Goals（必須のみ・対象年数内）
     outflows_by_month, targets_by_month, df_goals_norm = prepare_goals_events(
         df_goals, today,
         only_required=True,
         horizon_years=goals_horizon_years
     )
 
-    # --- Goals 実績（当月 / 累積）
     actual_goals_pmt_month = goals_log_monthly_actual(df_goals_log, today)
     actual_goals_cum = goals_log_cumulative(df_goals_log)
 
-    # --- Goals 進捗（累積を 近→中→長に割当）
     df_goals_progress = allocate_goals_progress(df_goals_norm, actual_goals_cum)
 
-    # --- 今月Goals積立（案A）
     goals_save_plan, df_goals_plan_detail = compute_goals_monthly_plan(
         df_goals_progress, today,
         emergency_not_met=emergency_not_met
     )
 
-    # --- 今月の余剰
     available_cash = float(summary["available_cash"])
     available_after_goals = max(available_cash - float(goals_save_plan), 0.0)
     goals_shortfall = available_cash < float(goals_save_plan)
 
-    # --- NISA係数（A/B/C完全廃止）
     nisa_coef, nisa_reason = compute_nisa_coefficient(
         available_cash_after_goals=available_after_goals,
         emergency_not_met=emergency_not_met,
@@ -1128,11 +1057,9 @@ def main():
         goals_shortfall=goals_shortfall,
     )
 
-    # --- 銀行積立 / NISA積立（Goalsを最優先に差し引いた後）
     nisa_save = float(available_after_goals * nisa_coef)
     bank_save = float(max(available_after_goals - nisa_save, 0.0))
 
-    # --- 自由に使えるお金（マイナスなら0表示）
     free_cash = float(max(available_cash - goals_save_plan - bank_save - nisa_save, 0.0))
 
     # ==================================================
@@ -1147,14 +1074,11 @@ def main():
 
     s1, s2 = st.columns(2)
 
-    # 生活防衛費達成率（推奨ライン）
     ef_ratio = 0.0 if float(ef["fund_rec"]) <= 0 else min(bank_balance / float(ef["fund_rec"]), 1.0)
     s1.metric("🛡️ 生活防衛費達成率（推奨）", f"{int(ef_ratio*100)} %")
     s1.progress(ef_ratio)
 
-    # Goals積立達成率（当月：実績 / 計画）
     if goals_save_plan <= 0:
-        goals_month_ratio = None
         s2.metric("🎯 Goals積立達成率（当月）", "—")
         s2.caption("今月、積立対象の必須Goalsがありません。")
     else:
@@ -1165,9 +1089,6 @@ def main():
 
     st.caption(f"NISA判定：{nisa_reason}")
 
-    # ==================================================
-    # 収支情報
-    # ==================================================
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
         f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
@@ -1277,7 +1198,6 @@ def main():
     if df_goals_progress is None or df_goals_progress.empty:
         st.info("対象期間内に必須Goalsがありません。")
     else:
-        # 計画詳細（今月）
         with st.expander("今月のGoals積立（内訳・近→中→長）を見る"):
             if df_goals_plan_detail is None or df_goals_plan_detail.empty:
                 st.info("今月、積立が必要な必須Goalsがありません。")
@@ -1291,9 +1211,7 @@ def main():
                 show = view[["bucket", "name", "達成期限", "残額", "最低積立", "今月計画"]].rename(columns={"name":"目標名"})
                 st.dataframe(show.style.format({"残額":"{:,.0f}","最低積立":"{:,.0f}","今月計画":"{:,.0f}"}), use_container_width=True)
 
-        # 進捗（累積）
         with st.expander("累積の達成率（項目別 + 円グラフ）を見る"):
-            # 近→中→長 の順で表示
             d = df_goals_progress.copy()
             d["bucket_name"] = d["bucket"].map({"near":"近距離","mid":"中距離","long":"遠距離"}).fillna(d["bucket"])
             d["deadline_ym"] = pd.to_datetime(d["deadline"]).dt.strftime("%Y-%m")
@@ -1329,7 +1247,6 @@ def main():
     # ==================================================
     st.subheader("🏁 FI（Financial Independence）")
 
-    # UI切替
     spend_choice = st.radio(
         "老後の月額支出（FIライン）",
         options=["35万円", "40万円", "45万円"],
@@ -1357,7 +1274,6 @@ def main():
     # ==================================================
     st.subheader("🔮 FIシミュレーション（支出イベント反映）")
 
-    # 現実：直近平均積立（合計）を推定して、今月の配分比で3分割
     real_total_pmt = estimate_realistic_monthly_contribution(df_balance, months=6)
 
     plan_total = float(bank_save + nisa_save + goals_save_plan)
@@ -1377,7 +1293,6 @@ def main():
         f"（防衛費 {int(monthly_emergency_save_real):,} ・NISA {int(monthly_nisa_save_real):,} ・Goals {int(monthly_goals_save_real):,}）"
     )
 
-    # 現在の Goals fund 推定：累積実績をそのまま「Goals口座残高」とみなす（単純モデル）
     current_goals_fund_est = float(max(actual_goals_cum, 0.0))
     current_emergency_cash_est = float(max(bank_balance - current_goals_fund_est, 0.0))
 
@@ -1402,7 +1317,6 @@ def main():
         ef_rec=float(ef["fund_rec"]),
     )
 
-    # FI達成月（カード表示）
     fi_ok = df_fi_sim[df_fi_sim["fi_ok_real"] == True].copy()
     if fi_ok.empty:
         st.info("現実（予測）では、指定の年齢までに FI達成が見つかりませんでした。")
@@ -1437,7 +1351,10 @@ def main():
                 "unpaid_real": "未払い（現実）",
                 "unpaid_ideal": "未払い（理想）",
             })
-            st.dataframe(view.style.format({"支出額":"{:,.0f}","未払い（現実）":"{:,.0f}","未払い（理想）":"{:,.0f}"}), use_container_width=True)
+            st.dataframe(
+                view.style.format({"支出額":"{:,.0f}","未払い（現実）":"{:,.0f}","未払い（理想）":"{:,.0f}"}),
+                use_container_width=True
+            )
 
     with tab2:
         view = df_fi_sim.copy()
@@ -1450,7 +1367,15 @@ def main():
             "investable_real":"投資可能（銀行+NISA）",
             "total_real":"合計（Goals含む）",
         })
-        st.dataframe(show.style.format("{:,.0f}"), use_container_width=True)
+
+        # ★修正：数値列だけフォーマット（'月' が文字列なので全体formatはNG）
+        num_cols = ["防衛費（推定）","Goals口座（推定）","NISA","投資可能（銀行+NISA）","合計（Goals含む）"]
+        show[num_cols] = show[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+        st.dataframe(
+            show.style.format({c: "{:,.0f}" for c in num_cols}),
+            use_container_width=True
+        )
 
 # ==================================================
 # 実行
