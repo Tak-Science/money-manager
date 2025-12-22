@@ -60,7 +60,7 @@ def get_spreadsheet():
     return service.spreadsheets()
 
 # ==================================================
-# データ読み込み（修正版：エラーを表示する）
+# データ読み込み（修正版：I1にメモがあっても落ちない最強版）
 # ==================================================
 @st.cache_data(ttl=60)
 def load_data():
@@ -69,30 +69,36 @@ def load_data():
 
     def get_df(sheet_name, range_):
         try:
-            # データを取得してみる
             res = sheet.values().get(spreadsheetId=spreadsheet_id, range=f"{sheet_name}!{range_}").execute()
             values = res.get("values", [])
             
-            # データが空っぽだった場合
             if not values:
-                st.warning(f"⚠️ シート「{sheet_name}」は見つかりましたが、データが空です。範囲 {range_} を確認してください。")
                 return pd.DataFrame()
-                
-            return pd.DataFrame(values[1:], columns=values[0])
+
+            # ★ここが修正ポイント：データの「歯抜け」を補正する処理
+            header = values[0]       # 1行目（見出し）
+            data = values[1:]        # 2行目以降（中身）
+            n_cols = len(header)     # 見出しの列数（I1まで書いてあれば9になる）
+
+            # データ行の長さが足りない場合、Noneで埋めて長さを揃える
+            # これで「見出しは9列、データは6列」でもエラーになりません
+            fixed_data = [row + [None] * (n_cols - len(row)) for row in data]
+
+            return pd.DataFrame(fixed_data, columns=header)
             
         except Exception as e:
-            # ★ここでエラー内容を画面に出す！
-            st.error(f"❌ シート「{sheet_name}」の読み込みに失敗しました。")
-            st.error(f"原因: {e}")
-            st.info("ヒント：スプレッドシートの「シート名」が、コードと一字一句（スペース含む）合っているか確認してください。")
+            # エラー時は空のDataFrameを返してアプリを止めない
+            st.error(f"❌ シート「{sheet_name}」読み込みエラー: {e}")
             return pd.DataFrame()
 
-    # ... 以下はそのまま ...
     df_params  = get_df("Parameters",       "A:D")
     df_fix     = get_df("Fix_Cost",         "A:G")
     df_forms   = get_df("Forms_Log",        "A:G")
     df_balance = get_df("Balance_Log",      "A:C")
-    df_goals   = get_df("Goals",            "A:Z") # ここでエラーが出るはず
+    
+    # 範囲を A:Z にしておけば、I列以降に何が書いてあっても大丈夫です
+    df_goals   = get_df("Goals",            "A:Z") 
+    
     df_goals_log = get_df("Goals_Save_Log","A:D")
 
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
@@ -1453,6 +1459,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
