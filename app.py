@@ -38,7 +38,6 @@ DIST_COEF = {
 STATE_COEF_EMERGENCY_NOT_MET = 1.2
 
 # KPI / 表示向け
-# ★修正：衣料品・特別費 を追加（Forms_Log の変動費に反映されるように）
 EXPENSE_CATEGORIES = [
     "食費（外食・交際）",
     "食費（日常）",
@@ -78,12 +77,15 @@ def load_data():
         except Exception:
             return pd.DataFrame()
 
-    df_params  = get_df("Parameters",      "A:D")
-    df_fix     = get_df("Fix_Cost",        "A:G")
-    df_forms   = get_df("Forms_Log",       "A:G")
-    df_balance = get_df("Balance_Log",     "A:C")
-    df_goals   = get_df("Goals",           "A:F")
-    df_goals_log = get_df("Goals_Save_Log","A:D")  # 月1回の実績入力
+    df_params  = get_df("Parameters",       "A:D")
+    df_fix     = get_df("Fix_Cost",         "A:G")
+    df_forms   = get_df("Forms_Log",        "A:G")
+    df_balance = get_df("Balance_Log",      "A:C")
+    
+    # ★修正：Goalsの読み込み範囲を拡張（支払済などの列を取得するため）
+    df_goals   = get_df("Goals",            "A:Z")
+    
+    df_goals_log = get_df("Goals_Save_Log","A:D")
 
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
 
@@ -114,8 +116,8 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
             df_forms["金額"] = pd.to_numeric(df_forms["金額"], errors="coerce").fillna(0)
         if "満足度" in df_forms.columns:
             df_forms["満足度"] = pd.to_numeric(df_forms["満足度"], errors="coerce")
-
-        # ★修正：費目の表記揺れ（前後スペース）を除去して、カテゴリ一致漏れを防ぐ
+        
+        # 費目の表記揺れ除去
         if "費目" in df_forms.columns:
             df_forms["費目"] = df_forms["費目"].astype(str).str.strip()
 
@@ -130,10 +132,24 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
 
     # Goals
     if df_goals is not None and (not df_goals.empty):
+        # ★追加：列名の空白を除去（"目標名 "などを防ぐ）
+        df_goals.columns = df_goals.columns.str.strip()
+
         if "達成期限" in df_goals.columns:
             df_goals["達成期限"] = pd.to_datetime(df_goals["達成期限"], errors="coerce")
+        
         if "金額" in df_goals.columns:
+            # ★修正：カンマや円記号を除去してから数値変換（"1,000,000" -> 1000000）
+            df_goals["金額"] = df_goals["金額"].astype(str).str.replace(",", "").str.replace("¥", "").str.replace("円", "")
             df_goals["金額"] = pd.to_numeric(df_goals["金額"], errors="coerce")
+
+        # ★追加：支払済列の処理
+        if "支払済" in df_goals.columns:
+            # 文字列の "TRUE", "True", "true" を True に変換
+            df_goals["支払済"] = df_goals["支払済"].astype(str).str.strip().str.upper() == "TRUE"
+        else:
+            # 列がない場合は全て未払いとする
+            df_goals["支払済"] = False
 
     # Goals_Save_Log（実績）
     if df_goals_log is not None and (not df_goals_log.empty):
@@ -514,12 +530,21 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
     required_cols = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
     for col in required_cols:
         if col not in df_goals.columns:
+            # 列不足の場合はデバッグ用に戻り値を返す
             return {}, {}, pd.DataFrame()
 
     df = df_goals.copy()
+    
+    # ★追加：支払済（TRUE）のGoalsを除外する
+    if "支払済" in df.columns:
+        df = df[~df["支払済"]] # Falseのものだけ残す
+
     df["達成期限"] = pd.to_datetime(df["達成期限"], errors="coerce")
     df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
+    
+    # 金額や期限が無効なものを除外
     df = df.dropna(subset=["達成期限", "金額"])
+    
     if df.empty:
         return {}, {}, pd.DataFrame()
 
@@ -1368,7 +1393,6 @@ def main():
             "total_real":"合計（Goals含む）",
         })
 
-        # ★修正：数値列だけフォーマット（'月' が文字列なので全体formatはNG）
         num_cols = ["防衛費（推定）","Goals口座（推定）","NISA","投資可能（銀行+NISA）","合計（Goals含む）"]
         show[num_cols] = show[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
 
@@ -1382,7 +1406,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
-
-
