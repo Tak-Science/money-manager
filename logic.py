@@ -512,77 +512,64 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_bank": float(current_bank),
         "current_nisa": float(current_nisa),
     }
-
+    
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
     """
     収入の範囲内で配分する。
-    【重要変更】
-    緑色の余剰が「目標額（生活費1.5ヶ月分）」未満の場合、
-    資産（ストック）を取り崩してのNISA積立は行わない（バッファ防衛優先）。
+    ただし、「バッファ目標」を超えた余剰資金（真の余剰）がある場合は、
+    今月の収入がなくても、そこからNISAやGoalsにお金を回す（資産のラベル貼り替え）。
     """
-    remaining = float(available_cash)
+    remaining_flow = float(available_cash) # 今月の収入（フロー）からの残り
     
-    # バッファ目標額を自動計算
+    # 1. 安全ラインの計算
+    # ----------------------------------------------------
     base_spend = monthly_spend_p75 if monthly_spend_p75 > 0 else 200000
     buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
-
-    # 1. 聖域（ミニマム積立）の確保
-    # ----------------------------------------------------
-    # A. 銀行積立
-    req_bank = 0.0
-    if emergency_not_met:
-        req_bank = config.MIN_BANK_AMOUNT
-    elif stock_surplus < buffer_target:
-        # バッファが目標未満なら、優先的に銀行へ入れる
-        req_bank = config.MIN_BANK_AMOUNT
-    else:
-        req_bank = 0.0
     
-    # B. NISA積立
+    # 「真の余剰（Excess Wealth）」を計算
+    # ストック余剰のうち、バッファ目標を超えている分だけが「自由に使っていいお金」
+    excess_wealth = max(stock_surplus - buffer_target, 0.0)
+
+    # 2. 聖域（ミニマム積立）の確保
+    # ----------------------------------------------------
+    req_bank = 0.0
+    # バッファが足りないなら、フローから銀行積立を試みる
+    if emergency_not_met or (stock_surplus < buffer_target):
+        req_bank = config.MIN_BANK_AMOUNT
+    
     req_nisa = config.MIN_NISA_AMOUNT
     
-    # 配分計算
     bank_alloc = 0.0
     nisa_alloc = 0.0
     
-    # (ケース1) 収入（フロー）で賄える場合
-    if remaining >= (req_bank + req_nisa):
-        bank_alloc = req_bank
-        nisa_alloc = req_nisa
-        remaining -= (bank_alloc + nisa_alloc)
-        
-    # (ケース2) 収入不足だが、資産余剰（ストック）がある場合
-    # ★修正：余剰があるだけでなく、「バッファ目標を超えている」場合のみ取り崩しOKとする
-    # つまり (今の余剰 - NISA額) が、まだ目標以上であること
-    elif (stock_surplus - req_nisa) >= buffer_target:
-        # 銀行積立は諦める（というかバッファ十分なので不要）
-        bank_alloc = 0.0 
-        
-        # 余剰が潤沢にあるので、そこからNISAを出す（リアロケーション）
-        nisa_alloc = req_nisa
-        
-        # フロー残金調整
-        remaining = max(remaining - bank_alloc - nisa_alloc, 0.0)
-        
-    # (ケース3) 収入もなく、バッファも目標割れしている（完全な守りの時期）
-    else:
-        # ストックには手を付けない！NISAも我慢する。
-        # あるだけの収入（フロー）を、銀行優先で割り振る
-        
-        if remaining >= req_bank:
-            bank_alloc = req_bank
-            remaining -= bank_alloc
-            # 残りでNISA
-            nisa_alloc = min(remaining, req_nisa)
-            remaining -= nisa_alloc
-        else:
-            # 銀行積立すら満額無理なら、あるだけ銀行へ
-            bank_alloc = remaining
-            remaining = 0.0
-
-    # 2. Goalsへの配分
-    # ... (以下、元のコードと同じ)
+    # 配分ロジック（フロー優先、足りなければストック）
     
+    # A. まず銀行積立（これはフローから出すのが基本）
+    if remaining_flow >= req_bank:
+        bank_alloc = req_bank
+        remaining_flow -= bank_alloc
+    else:
+        # フローで足りないなら、あるだけ入れる
+        bank_alloc = remaining_flow
+        remaining_flow = 0.0
+        
+    # B. 次にNISA（フローから、足りなければ真の余剰から）
+    needed_for_nisa = req_nisa
+    
+    # フローから出す
+    from_flow = min(remaining_flow, needed_for_nisa)
+    nisa_alloc += from_flow
+    remaining_flow -= from_flow
+    needed_for_nisa -= from_flow
+    
+    # 足りない分を「真の余剰」から補填
+    if needed_for_nisa > 0 and excess_wealth > 0:
+        from_stock = min(excess_wealth, needed_for_nisa)
+        nisa_alloc += from_stock
+        excess_wealth -= from_stock # 余剰を使ったので減らす
+
+    # 3. Goalsへの配分（フローから、足りなければ真の余剰から）
+    # ----------------------------------------------------
     total_goals_alloc = 0.0
     
     if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
@@ -590,6 +577,7 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
              bucket_map = {"near": 0, "mid": 1, "long": 2}
              df_goals_plan_detail["bucket_order"] = df_goals_plan_detail["bucket"].map(lambda x: bucket_map.get(str(x), 9))
         
+        # 優先順に埋めていく
         targets = df_goals_plan_detail.sort_values(["bucket_order", "deadline"])
         
         for _, row in targets.iterrows():
@@ -597,9 +585,18 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
             if ideal <= 0:
                 continue
             
-            pay = min(remaining, ideal)
-            remaining -= pay
-            total_goals_alloc += pay
+            # まずフローの残りで埋める
+            pay_flow = min(remaining_flow, ideal)
+            remaining_flow -= pay_flow
+            ideal -= pay_flow
+            
+            # ★修正点：まだ足りなくて、真の余剰があるなら、そこから埋める！
+            pay_stock = 0.0
+            if ideal > 0 and excess_wealth > 0:
+                pay_stock = min(excess_wealth, ideal)
+                excess_wealth -= pay_stock
+            
+            total_goals_alloc += (pay_flow + pay_stock)
             
     else:
         total_goals_alloc = 0.0
@@ -607,9 +604,8 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
     goals_plan_ideal = df_goals_plan_detail["plan_pmt"].sum() if (df_goals_plan_detail is not None and not df_goals_plan_detail.empty) else 0.0
     goals_shortfall = float(goals_plan_ideal) - total_goals_alloc
 
-    if remaining > 0:
-        # 完全に余ったら自由費へ
-        pass
+    # 余ったフローの扱い（自由費へ）
+    # (logicでは計算せず、そのまま呼び出し元が available - alloc で計算する)
 
     return {
         "nisa_save": int(nisa_alloc),
