@@ -513,73 +513,51 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
+# ★修正：monthly_spend_p75 引数を追加
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
     """
     収入の範囲内で配分する。
-    緑色の余剰が「生活費の1.5ヶ月分」に達するまでは、銀行積立を継続する。
+    緑色の余剰が「生活費のNヶ月分（自動計算）」に達するまでは、銀行積立を継続する。
     """
     remaining = float(available_cash)
     
-    # バッファ目標額を自動計算（P75生活費 × 係数）
-    # もしデータ不足で0円なら、とりあえず20万円としておく（安全策）
+    # バッファ目標額を自動計算
     base_spend = monthly_spend_p75 if monthly_spend_p75 > 0 else 200000
     buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
 
     # 1. 聖域（ミニマム積立）の確保
-    # ----------------------------------------------------
-    # A. 銀行積立（生活防衛費 ＋ 緑のバッファ）
     req_bank = 0.0
-    
     if emergency_not_met:
         req_bank = config.MIN_BANK_AMOUNT
     elif stock_surplus < buffer_target:
-        # 防衛費は足りてるけど、緑のバッファが計算上の目標に届いていない
         req_bank = config.MIN_BANK_AMOUNT
     else:
-        # 防衛費もバッファも十分 → 銀行積立卒業
         req_bank = 0.0
     
-    # B. NISA積立
     req_nisa = config.MIN_NISA_AMOUNT
     
-    # 配分計算
     bank_alloc = 0.0
     nisa_alloc = 0.0
     
-    # (ケース1) 収入（フロー）で賄える場合
     if remaining >= (req_bank + req_nisa):
         bank_alloc = req_bank
         nisa_alloc = req_nisa
         remaining -= (bank_alloc + nisa_alloc)
         
-    # (ケース2) 収入不足だが、資産余剰（ストック）がある場合
-    # → 銀行内の「緑の余剰」を取り崩して、NISAに回す（リアロケーション）
     elif stock_surplus > req_nisa:
-        # 銀行積立は諦める（というか余剰があるなら積む必要なし）
+        # 余剰があるならNISAだけは出す
         bank_alloc = 0.0 
-        
-        # NISAは余剰から出す
-        # ただし、今月の収入がちょっとあるならそこから出し、足りない分を余剰から出すイメージ
         nisa_alloc = req_nisa
-        
-        # remaining（フロー残金）は、もしプラスならGoalsへ、マイナスなら0へ
         remaining = max(remaining - bank_alloc - nisa_alloc, 0.0)
         
-    # (ケース3) 収入も資産余剰もない（完全な金欠）
     else:
-        # あるだけの収入を按分（ほぼ0になる）
         total_req = req_bank + req_nisa
         ratio = remaining / total_req if total_req > 0 else 0
         bank_alloc = req_bank * ratio
         nisa_alloc = req_nisa * ratio
         remaining = 0.0
 
-    # 2. Goalsへの配分（期限が近いもの・優先度が高いものから順に埋める）
-    # ----------------------------------------------------
-    # ※Goalsは「フロー（収入）」から出すのが基本。
-    # 資産を取り崩してまでGoalsを埋めると、手元の自由資金が枯渇して危険なので
-    # remaining（収入の残り）がある場合のみ実施する。
-    
+    # 2. Goalsへの配分
     total_goals_alloc = 0.0
     
     if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
@@ -601,13 +579,14 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
     else:
         total_goals_alloc = 0.0
 
-    # Goalsの不足額（理想 - 現実）
     goals_plan_ideal = df_goals_plan_detail["plan_pmt"].sum() if (df_goals_plan_detail is not None and not df_goals_plan_detail.empty) else 0.0
     goals_shortfall = float(goals_plan_ideal) - total_goals_alloc
 
-    # 3. 余剰金の扱い
-    # 余ったらNISAや銀行に追加してもいいが、今回は「自由費」として返す
-    # (logic側では決定せず、app側でfree_cashとして扱う)
+    if remaining > 0:
+        extra_nisa = remaining * 0.5
+        extra_bank = remaining * 0.5
+        nisa_alloc += extra_nisa
+        bank_alloc += extra_bank
 
     return {
         "nisa_save": int(nisa_alloc),
@@ -616,6 +595,7 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
         "goals_shortfall": int(goals_shortfall),
         "ideal_goals_total": int(goals_plan_ideal)
     }
+
 # ==================================================
 # FI / SWR 計算
 # ==================================================
