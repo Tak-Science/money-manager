@@ -1142,8 +1142,6 @@ def main():
         s2.progress(goals_month_ratio)
         s2.caption(f"当月実績：{int(actual_goals_pmt_month):,} 円 / 計画：{int(goals_save_plan):,} 円")
 
-    st.caption(f"NISA判定：{nisa_reason}")
-
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
         f"(固定 {int(summary['base_income']):,} / 臨時 {int(summary['variable_income']):,})"
