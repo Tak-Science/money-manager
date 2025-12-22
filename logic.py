@@ -68,7 +68,6 @@ def calculate_monthly_variable_cost(df_forms, today):
     current_month = today.strftime("%Y-%m")
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
-    # configからカテゴリを参照
     return float(d[(d["month"] == current_month) & (d["費目"].isin(config.EXPENSE_CATEGORIES))]["金額"].sum())
 
 def calculate_monthly_variable_income(df_forms, today):
@@ -80,7 +79,6 @@ def calculate_monthly_variable_income(df_forms, today):
     current_month = today.strftime("%Y-%m")
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
-    # configからカテゴリを参照
     return float(d[(d["month"] == current_month) & (d["費目"].isin(config.INCOME_CATEGORIES))]["金額"].sum())
 
 # ==================================================
@@ -195,7 +193,6 @@ def analyze_category_trend_3m(df_forms, today):
         return []
 
     d = df_forms.copy()
-    # config参照
     d = d[d["費目"].isin(config.EXPENSE_CATEGORIES)]
     d["month"] = d["日付"].dt.to_period("M").astype(str)
 
@@ -234,7 +231,7 @@ def analyze_category_trend_3m(df_forms, today):
     return result
 
 # ==================================================
-# 生活防衛費（月次シリーズ作成）
+# 生活防衛費
 # ==================================================
 def build_month_list(today, months_back=12):
     end = pd.Period(today.strftime("%Y-%m"), freq="M")
@@ -245,7 +242,6 @@ def monthly_variable_cost_series(df_forms, months):
         return pd.Series(0.0, index=months, dtype=float)
 
     d = df_forms.copy()
-    # config参照
     d = d[d["費目"].isin(config.EXPENSE_CATEGORIES)]
     d["month"] = d["日付"].dt.to_period("M").astype(str)
 
@@ -349,7 +345,6 @@ def months_until(today, deadline):
 def classify_distance_bucket(today, deadline):
     m = months_until(today, deadline)
     years = m / 12.0
-    # config参照
     if years <= config.NEAR_YEARS:
         return "near"
     if years <= config.MID_YEARS:
@@ -473,14 +468,12 @@ def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
     if df_goals_progress is None or df_goals_progress.empty:
         return 0.0, pd.DataFrame()
 
-    # config参照
     state = config.STATE_COEF_EMERGENCY_NOT_MET if emergency_not_met else 1.0
 
     d = df_goals_progress.copy()
     d["months_left"] = d["deadline"].apply(lambda x: months_until(today, x))
     d["min_pmt"] = d.apply(lambda r: 0.0 if r["remaining_amount"] <= 0 else float(r["remaining_amount"] / max(int(r["months_left"]), 1)), axis=1)
     
-    # config参照
     d["dist_coef"] = d["bucket"].apply(lambda b: float(config.DIST_COEF.get(str(b), 1.0)))
 
     d["plan_pmt"] = d.apply(
@@ -492,7 +485,7 @@ def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
     return total, d
 
 # ==================================================
-# 今月サマリー & NISA係数
+# 今月サマリー & 配分ロジック (NEW)
 # ==================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     base_income = to_float_safe(get_latest_parameter(df_params, "月収", today), default=0.0)
@@ -520,22 +513,72 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
-def compute_nisa_coefficient(
-    *,
-    available_cash_after_goals,
-    emergency_not_met,
-    emergency_is_danger,
-    goals_shortfall,
-):
-    if available_cash_after_goals <= 0:
-        return 0.0, "赤字またはGoals後に余剰なし → NISA 0"
-    if goals_shortfall:
-        return 0.0, "Goals積立が不足 → NISA 0"
-    if emergency_is_danger:
-        return 0.0, "生活防衛費 危険ゾーン → NISA 0"
-    if emergency_not_met:
-        return 0.0, "生活防衛費 未達 → NISA 0（2段階）"
-    return 1.0, "条件OK → NISA 100%"
+def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met):
+    """
+    収入の範囲内で、NISA・銀行・Goalsに優先順位をつけて配分する
+    優先順位: 聖域(NISA/Bank) > Goals(期限切迫順) > 余剰NISA/Bank
+    """
+    remaining = float(available_cash)
+    
+    # 1. 聖域（ミニマム積立）の確保
+    min_req = config.MIN_NISA_AMOUNT + config.MIN_BANK_AMOUNT
+    
+    if remaining >= min_req:
+        nisa_alloc = float(config.MIN_NISA_AMOUNT)
+        bank_alloc = float(config.MIN_BANK_AMOUNT)
+        remaining -= min_req
+    else:
+        # 聖域すら確保できない場合（按分）
+        ratio = remaining / min_req if min_req > 0 else 0
+        nisa_alloc = float(config.MIN_NISA_AMOUNT * ratio)
+        bank_alloc = float(config.MIN_BANK_AMOUNT * ratio)
+        remaining = 0.0
+
+    # 2. Goalsへの配分（期限が近いもの・優先度が高いものから順に埋める）
+    total_goals_alloc = 0.0
+    
+    # 配分詳細を計算（ドミノ倒し）
+    if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
+        # 重要な順にソート（直近 > 遠い）
+        # bucket_orderがない場合は作る
+        if "bucket_order" not in df_goals_plan_detail.columns:
+             bucket_map = {"near": 0, "mid": 1, "long": 2}
+             df_goals_plan_detail["bucket_order"] = df_goals_plan_detail["bucket"].map(lambda x: bucket_map.get(str(x), 9))
+        
+        # 期限が近い順に並べる
+        targets = df_goals_plan_detail.sort_values(["bucket_order", "deadline"])
+        
+        for _, row in targets.iterrows():
+            ideal = float(row["plan_pmt"])
+            if ideal <= 0:
+                continue
+            
+            # 残金を使って埋める
+            pay = min(remaining, ideal)
+            remaining -= pay
+            total_goals_alloc += pay
+            
+    else:
+        total_goals_alloc = 0.0
+
+    # Goalsの不足額（理想 - 現実）
+    goals_plan_ideal = df_goals_plan_detail["plan_pmt"].sum() if (df_goals_plan_detail is not None and not df_goals_plan_detail.empty) else 0.0
+    goals_shortfall = float(goals_plan_ideal) - total_goals_alloc
+
+    # 3. それでも余ったら（ボーナスなど）、NISAと銀行に追加配分
+    if remaining > 0:
+        extra_nisa = remaining * 0.5
+        extra_bank = remaining * 0.5
+        nisa_alloc += extra_nisa
+        bank_alloc += extra_bank
+
+    return {
+        "nisa_save": int(nisa_alloc),
+        "bank_save": int(bank_alloc),
+        "goals_save": int(total_goals_alloc),
+        "goals_shortfall": int(goals_shortfall),
+        "ideal_goals_total": int(goals_plan_ideal)
+    }
 
 # ==================================================
 # FI / SWR 計算
