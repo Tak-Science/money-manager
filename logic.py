@@ -513,32 +513,35 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
-def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus):
+def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
     """
     収入の範囲内で配分する。
-    緑色の余剰が目標額に達するまでは、銀行積立を継続する。
+    緑色の余剰が「生活費の1.5ヶ月分」に達するまでは、銀行積立を継続する。
     """
     remaining = float(available_cash)
     
+    # バッファ目標額を自動計算（P75生活費 × 係数）
+    # もしデータ不足で0円なら、とりあえず20万円としておく（安全策）
+    base_spend = monthly_spend_p75 if monthly_spend_p75 > 0 else 200000
+    buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
+
     # 1. 聖域（ミニマム積立）の確保
     # ----------------------------------------------------
     # A. 銀行積立（生活防衛費 ＋ 緑のバッファ）
-    # 防衛費が未達、または「緑の余剰」が目標（30万など）未満なら銀行に入れる
     req_bank = 0.0
     
     if emergency_not_met:
         req_bank = config.MIN_BANK_AMOUNT
-    elif stock_surplus < config.BANK_GREEN_BUFFER_TARGET:
-        # 防衛費は足りてるけど、緑のバッファをもっと厚くしたい
+    elif stock_surplus < buffer_target:
+        # 防衛費は足りてるけど、緑のバッファが計算上の目標に届いていない
         req_bank = config.MIN_BANK_AMOUNT
     else:
-        # 防衛費もバッファも十分すぎるほどある → 銀行積立卒業
+        # 防衛費もバッファも十分 → 銀行積立卒業
         req_bank = 0.0
     
     # B. NISA積立
     req_nisa = config.MIN_NISA_AMOUNT
     
-    # ... (以下、元のコードのまま)
     # 配分計算
     bank_alloc = 0.0
     nisa_alloc = 0.0
