@@ -46,7 +46,8 @@ def plot_asset_trend(df_balance, ef):
         hovermode="x unified",
         height=480
     )
-    st.plotly_chart(fig, use_container_width=True)
+    # ここにも念のため key を追加しておくと安全です
+    st.plotly_chart(fig, use_container_width=True, key="asset_trend_chart")
 
 def plot_goal_pie(title, achieved, total, key=None):
     achieved = float(max(achieved, 0.0))
@@ -65,6 +66,7 @@ def plot_goal_pie(title, achieved, total, key=None):
         margin=dict(l=10, r=10, t=50, b=10),
         showlegend=True
     )
+    # key引数は呼び出し元から渡される仕組みになっています
     st.plotly_chart(fig, use_container_width=True, key=key)
 
 def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
@@ -179,7 +181,7 @@ def main():
         emergency_not_met=emergency_not_met
     )
 
-    # ★変更：現実的な配分計算（Logic V2）
+    # 現実的な配分計算（Logic V2）
     available_cash = float(summary["available_cash"])
     
     allocation = lg.allocate_monthly_budget(
@@ -228,8 +230,7 @@ def main():
         help="配分計算後の端数などです。"
     )
 
-    # ★追加：稼ぐ目標額の目安（独り言）
-    # 理想を達成するための「手取り目安」 = 固定費 + 変動費 + 聖域 + Goals理想
+    # 稼ぐ目標額の目安（独り言）
     target_income_ideal = float(summary["fix_cost"]) + float(summary["variable_cost"]) + float(config.MIN_NISA_AMOUNT + config.MIN_BANK_AMOUNT) + float(goals_ideal_total)
     shortage_for_ideal = max(target_income_ideal - float(summary["monthly_income"]), 0)
 
@@ -274,7 +275,6 @@ def main():
         s2.metric("🎯 Goals積立達成率（当月）", "—")
         s2.caption("今月、積立対象の必須Goalsがありません。")
     else:
-        # 理想に対する達成率
         goals_month_ratio = min(float(goals_save_actual) / float(goals_ideal_total), 1.0)
         s2.metric("🎯 Goals積立達成率（当月）", f"{int(goals_month_ratio*100)} %")
         s2.progress(goals_month_ratio)
@@ -286,6 +286,81 @@ def main():
     )
     st.caption(f"固定費：{int(summary['fix_cost']):,} 円 / 変動費：{int(summary['variable_cost']):,} 円")
     st.caption(f"※ 現在資産：{int(summary['current_total_asset']):,} 円（銀行 {int(bank_balance):,} / NISA {int(nisa_balance):,}）")
+
+    # ==================================================
+    # 🏦 銀行口座の「仮想内訳」見える化 (NEW)
+    # ==================================================
+    st.subheader("🏦 銀行口座の中身（仮想内訳）")
+
+    # 1. 銀行にあるべき「Goals預かり金」の合計（過去の積立実績の総和）
+    saved_goals_total = lg.goals_log_cumulative(df_goals_log)
+
+    # 2. 実際の銀行残高
+    current_bank_real = bank_balance
+
+    # 3. 内訳計算
+    breakdown_goals = min(current_bank_real, saved_goals_total)
+    remainder = current_bank_real - breakdown_goals
+    breakdown_emergency = remainder 
+    
+    emergency_target = float(ef["fund_rec"])
+    
+    # グラフ表示
+    fig_bd = go.Figure()
+    
+    # Goals部分
+    fig_bd.add_trace(go.Bar(
+        y=["銀行口座の内訳"],
+        x=[breakdown_goals],
+        name="🔴 未来の支払用 (Goals)",
+        orientation='h',
+        marker=dict(color='#FF6B6B'), # 赤系
+        text=f"{int(breakdown_goals):,} 円",
+        textposition='auto',
+        hovertemplate="<b>Goals預かり金</b><br>%{x:,.0f} 円<br>（絶対に触らない！）<extra></extra>"
+    ))
+
+    # 防衛費部分
+    fig_bd.add_trace(go.Bar(
+        y=["銀行口座の内訳"],
+        x=[breakdown_emergency],
+        name="🟡 生活防衛費 (Safety)",
+        orientation='h',
+        marker=dict(color='#4ECDC4'), # 青緑系
+        text=f"{int(breakdown_emergency):,} 円",
+        textposition='auto',
+        hovertemplate="<b>実質の生活防衛費</b><br>%{x:,.0f} 円<br>（Goalsを引いた残り）<extra></extra>"
+    ))
+
+    fig_bd.update_layout(
+        barmode='stack',
+        height=200,
+        title="",
+        xaxis_title="金額（円）",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+        margin=dict(l=20, r=20, t=30, b=20)
+    )
+
+    col_bd1, col_bd2 = st.columns([2, 1])
+    
+    with col_bd1:
+        # ★ここが修正ポイント：key="bank_breakdown" を追加してID重複を回避
+        st.plotly_chart(fig_bd, use_container_width=True, key="bank_breakdown")
+        
+    with col_bd2:
+        if current_bank_real < saved_goals_total:
+            st.error("🚨 警告：Goals資金が不足しています！")
+            st.caption(f"積み立てたはずのGoals資金（{int(saved_goals_total):,}円）に対し、実際の残高が足りていません。無意識に使ってしまっています。")
+        else:
+            safe_margin = breakdown_emergency - emergency_target
+            if safe_margin >= 0:
+                st.success("✅ 健全な状態です")
+                st.caption("Goals資金を確保した上で、生活防衛費も目標額を満たしています。")
+            else:
+                st.info("⚠️ 生活防衛費を構築中です")
+                st.caption(f"Goals資金は確保できています。防衛費の目標まであと {int(abs(safe_margin)):,} 円です。")
+
+    st.divider()
 
     # ==================================================
     # 赤字分析
@@ -366,7 +441,6 @@ def main():
     # ==================================================
     # Goals（積立詳細 + 円グラフ）
     # ==================================================
-    # ★修正：captionを削除し、helpに統一
     st.subheader("🎯 Goals（必須）積立の進捗", help=f"対象：必須のみ / 今日から {goals_horizon_years} 年先まで")
 
     if df_goals_progress is None or df_goals_progress.empty:
@@ -408,95 +482,8 @@ def main():
                         total=float(r["amount"]),
                         key=f"pie_{i}"
                     )
-                # ==================================================
-                # 🏦 銀行口座の「仮想内訳」見える化 (NEW)
-                # ==================================================
-                st.subheader("🏦 銀行口座の中身（仮想内訳）")
+                st.divider()
 
-                # 1. 銀行にあるべき「Goals預かり金」の合計（過去の積立実績の総和）
-                # ※ logic.goals_log_cumulative は全期間の合計を返します
-                saved_goals_total = lg.goals_log_cumulative(df_goals_log)
-
-                # 2. 実際の銀行残高
-                current_bank_real = bank_balance
-
-                # 3. 内訳計算
-                # 銀行残高のうち、Goals分が占める割合
-                # もし残高 < Goals積立額 なら、Goals資金すら手を付けてしまっている危険状態
-                breakdown_goals = min(current_bank_real, saved_goals_total)
-    
-                # 残りが生活防衛費
-                remainder = current_bank_real - breakdown_goals
-                breakdown_emergency = remainder # 余った分すべてが防衛費扱い
-    
-                # 生活防衛費の推奨額に対して、今の「残り」がどれくらいあるか
-                emergency_target = float(ef["fund_rec"])
-    
-                # グラフ表示用のデータ
-                df_breakdown = pd.DataFrame({
-                    "内訳": ["🔴 未来の支払用 (Goals)", "🟡 生活防衛費 (Safety)"],
-                    "金額": [breakdown_goals, breakdown_emergency],
-                    "説明": [
-                        f"過去に積み立てたGoals資金です。\n絶対に使ってはいけません。\n(実績累計: {int(saved_goals_total):,}円)",
-                        f"Goalsを引いた残りのお金です。\n何かあった時はここから出します。\n(目標: {int(emergency_target):,}円)"
-                    ]
-                })
-
-                # 横棒グラフで内訳を表示
-                fig_bd = go.Figure()
-    
-                # Goals部分
-                fig_bd.add_trace(go.Bar(
-                    y=["銀行口座の内訳"],
-                    x=[breakdown_goals],
-                    name="🔴 未来の支払用 (Goals)",
-                    orientation='h',
-                    marker=dict(color='#FF6B6B'), # 赤系
-                    text=f"{int(breakdown_goals):,} 円",
-                    textposition='auto',
-                    hovertemplate="<b>Goals預かり金</b><br>%{x:,.0f} 円<br>（絶対に触らない！）<extra></extra>"
-                ))
-
-                # 防衛費部分
-                fig_bd.add_trace(go.Bar(
-                    y=["銀行口座の内訳"],
-                    x=[breakdown_emergency],
-                    name="🟡 生活防衛費 (Safety)",
-                    orientation='h',
-                    marker=dict(color='#4ECDC4'), # 青緑系
-                    text=f"{int(breakdown_emergency):,} 円",
-                    textposition='auto',
-                    hovertemplate="<b>実質の生活防衛費</b><br>%{x:,.0f} 円<br>（Goalsを引いた残り）<extra></extra>"
-                ))
-
-                fig_bd.update_layout(
-                    barmode='stack',
-                    height=200,
-                    title="",
-                    xaxis_title="金額（円）",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=20, r=20, t=30, b=20)
-                )
-
-                col_bd1, col_bd2 = st.columns([2, 1])
-    
-                with col_bd1:
-                    st.plotly_chart(fig_bd, use_container_width=True)
-        
-                with col_bd2:
-                    # アラート判定
-                    if current_bank_real < saved_goals_total:
-                        st.error("🚨 警告：Goals資金が不足しています！")
-                        st.caption(f"積み立てたはずのGoals資金（{int(saved_goals_total):,}円）に対し、実際の残高が足りていません。無意識に使ってしまっています。")
-                    else:
-                        safe_margin = breakdown_emergency - emergency_target
-                        if safe_margin >= 0:
-                            st.success("✅ 健全な状態です")
-                            st.caption("Goals資金を確保した上で、生活防衛費も目標額を満たしています。")
-                        else:
-                            st.info("⚠️ 生活防衛費を構築中です")
-                            st.caption(f"Goals資金は確保できています。防衛費の目標まであと {int(abs(safe_margin)):,} 円です。")
-                            st.divider()      
     # ==================================================
     # 資産推移（現状）
     # ==================================================
@@ -535,8 +522,6 @@ def main():
     # ==================================================
     # FIシミュレーション
     # ==================================================
-    # ★修正：計算ロジックを先に実行し、subheaderのhelpに表示
-    
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
 
     plan_total = float(bank_save + nisa_save + goals_save_actual)
@@ -551,7 +536,6 @@ def main():
     monthly_nisa_save_real = float(real_total_pmt * share_nisa)
     monthly_goals_save_real = float(real_total_pmt * share_goals)
 
-    # captionだった内容をhelp用のテキストに格納
     fi_sim_help_text = (
         f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月\n"
         f"（防衛費 {int(monthly_emergency_save_real):,} ・NISA {int(monthly_nisa_save_real):,} ・Goals {int(monthly_goals_save_real):,}）"
@@ -559,7 +543,6 @@ def main():
 
     st.subheader("🔮 FIシミュレーション（支出イベント反映）", help=fi_sim_help_text)
 
-    # 計算用パラメータ
     current_goals_fund_est = float(max(actual_goals_cum, 0.0))
     current_emergency_cash_est = float(max(bank_balance - current_goals_fund_est, 0.0))
 
@@ -642,4 +625,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
