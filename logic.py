@@ -1,0 +1,723 @@
+import pandas as pd
+import re
+from datetime import datetime
+from collections import defaultdict
+
+# 設定ファイルを読み込みます
+import config
+
+# ==================================================
+# Parameters 取得（履歴対応）
+# ==================================================
+def get_latest_parameter(df, item, target_date):
+    if df is None or df.empty:
+        return None
+    if not {"項目", "値", "適用開始日"}.issubset(set(df.columns)):
+        return None
+
+    d = df.copy()
+    d = d[d["項目"] == item].dropna(subset=["適用開始日"])
+    d = d[d["適用開始日"] <= target_date]
+    if d.empty:
+        return None
+    return d.sort_values("適用開始日").iloc[-1]["値"]
+
+def to_float_safe(x, default=0.0):
+    try:
+        if x is None:
+            return default
+        return float(x)
+    except Exception:
+        return default
+
+def to_int_safe(x, default=0):
+    try:
+        if x is None:
+            return default
+        return int(float(x))
+    except Exception:
+        return default
+
+# ==================================================
+# 固定費（今月）
+# ==================================================
+def calculate_monthly_fix_cost(df_fix, today):
+    if df_fix is None or df_fix.empty:
+        return 0.0
+    needed_cols = {"開始日", "終了日", "金額"}
+    if not needed_cols.issubset(set(df_fix.columns)):
+        return 0.0
+
+    d = df_fix.copy()
+    active = d[
+        (d["開始日"].notna()) &
+        (d["開始日"] <= today) &
+        ((d["終了日"].isna()) | (d["終了日"] >= today))
+    ]
+    return float(active["金額"].sum())
+
+# ==================================================
+# 変動費（今月）
+# ==================================================
+def calculate_monthly_variable_cost(df_forms, today):
+    if df_forms is None or df_forms.empty:
+        return 0.0
+    if not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+        return 0.0
+
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    # configからカテゴリを参照
+    return float(d[(d["month"] == current_month) & (d["費目"].isin(config.EXPENSE_CATEGORIES))]["金額"].sum())
+
+def calculate_monthly_variable_income(df_forms, today):
+    if df_forms is None or df_forms.empty:
+        return 0.0
+    if not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+        return 0.0
+
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    # configからカテゴリを参照
+    return float(d[(d["month"] == current_month) & (d["費目"].isin(config.INCOME_CATEGORIES))]["金額"].sum())
+
+# ==================================================
+# 残高（最新）
+# ==================================================
+def get_latest_bank_balance(df_balance):
+    if df_balance is None or df_balance.empty:
+        return None
+    if not {"日付", "銀行残高"}.issubset(set(df_balance.columns)):
+        return None
+
+    d = df_balance.copy().dropna(subset=["日付", "銀行残高"]).sort_values("日付")
+    if d.empty:
+        return None
+    return float(d.iloc[-1]["銀行残高"])
+
+def get_latest_nisa_balance(df_balance):
+    if df_balance is None or df_balance.empty:
+        return 0.0
+    if not {"日付", "NISA評価額"}.issubset(set(df_balance.columns)):
+        return 0.0
+    d = df_balance.copy().dropna(subset=["日付"]).sort_values("日付")
+    if d.empty:
+        return 0.0
+    v = pd.to_numeric(d.iloc[-1]["NISA評価額"], errors="coerce")
+    return 0.0 if pd.isna(v) else float(v)
+
+def get_latest_total_asset(df_balance):
+    bank = get_latest_bank_balance(df_balance)
+    nisa = get_latest_nisa_balance(df_balance)
+    return float((bank or 0.0) + (nisa or 0.0))
+
+# ==================================================
+# 赤字分析
+# ==================================================
+def analyze_deficit(monthly_income, fix_cost, variable_cost):
+    total_deficit = (fix_cost + variable_cost) - monthly_income
+    if total_deficit <= 0:
+        return None
+
+    variable_expected = monthly_income * 0.3
+    fix_over = max(fix_cost - monthly_income, 0.0)
+    var_over = max(variable_cost - variable_expected, 0.0)
+
+    return {
+        "total_deficit": float(total_deficit),
+        "fix_over": float(fix_over),
+        "var_over": float(var_over),
+        "var_expected": float(variable_expected),
+        "var_actual": float(variable_cost),
+    }
+
+# ==================================================
+# メモ頻出分析
+# ==================================================
+def analyze_memo_frequency_advanced(df_forms, today, is_deficit, variable_cost, monthly_income, top_n=5):
+    variable_expected = monthly_income * 0.3
+    if (not is_deficit) and (variable_cost <= variable_expected):
+        return []
+
+    if df_forms is None or df_forms.empty or not {"日付", "金額", "満足度", "メモ"}.issubset(set(df_forms.columns)):
+        return []
+
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    target = d[(d["month"] == current_month) & (d["満足度"] <= 2) & (d["メモ"].notna())]
+    if target.empty:
+        return []
+
+    memo_stats = defaultdict(lambda: {"count": 0, "amount": 0.0})
+    for _, row in target.iterrows():
+        words = re.findall(r"[一-龥ぁ-んァ-ンA-Za-z0-9]+", str(row["メモ"]))
+        for w in words:
+            memo_stats[w]["count"] += 1
+            memo_stats[w]["amount"] += float(row["金額"])
+
+    result = [(word, v["count"], v["amount"]) for word, v in memo_stats.items()]
+    result.sort(key=lambda x: (x[1], x[2]), reverse=True)
+    return result[:top_n]
+
+def analyze_memo_by_category(df_forms, today, is_deficit, variable_cost, monthly_income):
+    variable_expected = monthly_income * 0.3
+    if (not is_deficit) and (variable_cost <= variable_expected):
+        return {}
+
+    if df_forms is None or df_forms.empty or not {"日付", "金額", "満足度", "メモ", "費目"}.issubset(set(df_forms.columns)):
+        return {}
+
+    current_month = today.strftime("%Y-%m")
+    d = df_forms.copy()
+    d["month"] = d["日付"].dt.strftime("%Y-%m")
+    target = d[(d["month"] == current_month) & (d["満足度"] <= 2) & (d["メモ"].notna())]
+    if target.empty:
+        return {}
+
+    result = {}
+    for _, row in target.iterrows():
+        category = row["費目"]
+        memo = row["メモ"]
+        result.setdefault(category, {})
+        result[category].setdefault(memo, {"count": 0, "amount": 0.0})
+        result[category][memo]["count"] += 1
+        result[category][memo]["amount"] += float(row["金額"])
+    return result
+
+# ==================================================
+# カテゴリトレンド分析
+# ==================================================
+def analyze_category_trend_3m(df_forms, today):
+    if df_forms is None or df_forms.empty or not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+        return []
+
+    d = df_forms.copy()
+    # config参照
+    d = d[d["費目"].isin(config.EXPENSE_CATEGORIES)]
+    d["month"] = d["日付"].dt.to_period("M").astype(str)
+
+    current_month = today.strftime("%Y-%m")
+    months = pd.period_range(end=pd.Period(current_month, freq="M"), periods=4, freq="M").astype(str)
+    d = d[d["month"].isin(months)]
+    if d.empty:
+        return []
+
+    pivot = (
+        d.groupby(["month", "費目"], as_index=False)["金額"]
+        .sum()
+        .pivot(index="費目", columns="month", values="金額")
+        .fillna(0)
+    )
+
+    if current_month not in pivot.columns:
+        return []
+
+    past_months = [m for m in pivot.columns if m != current_month]
+    if not past_months:
+        return []
+
+    pivot["past_3m_avg"] = pivot[past_months].mean(axis=1)
+    pivot["diff"] = pivot[current_month] - pivot["past_3m_avg"]
+    increased = pivot[pivot["diff"] > 0].sort_values("diff", ascending=False)
+
+    result = []
+    for category, row in increased.iterrows():
+        result.append({
+            "category": category,
+            "current": float(row[current_month]),
+            "past_avg": float(row["past_3m_avg"]),
+            "diff": float(row["diff"]),
+        })
+    return result
+
+# ==================================================
+# 生活防衛費（月次シリーズ作成）
+# ==================================================
+def build_month_list(today, months_back=12):
+    end = pd.Period(today.strftime("%Y-%m"), freq="M")
+    return list(pd.period_range(end=end, periods=months_back, freq="M").astype(str))
+
+def monthly_variable_cost_series(df_forms, months):
+    if df_forms is None or df_forms.empty or not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+        return pd.Series(0.0, index=months, dtype=float)
+
+    d = df_forms.copy()
+    # config参照
+    d = d[d["費目"].isin(config.EXPENSE_CATEGORIES)]
+    d["month"] = d["日付"].dt.to_period("M").astype(str)
+
+    s = d.groupby("month")["金額"].sum().reindex(months, fill_value=0.0).astype(float)
+    return s
+
+def monthly_fix_cost_series(df_fix, months):
+    if df_fix is None or df_fix.empty or not {"開始日", "終了日", "金額", "サイクル"}.issubset(set(df_fix.columns)):
+        return pd.Series(0.0, index=months, dtype=float)
+
+    d = df_fix.copy()
+    out = pd.Series(0.0, index=months, dtype=float)
+
+    for m in months:
+        p = pd.Period(m, freq="M")
+        month_start = p.start_time
+        month_end = p.end_time
+
+        active = d[
+            (d["開始日"].notna()) &
+            (d["開始日"] <= month_end) &
+            ((d["終了日"].isna()) | (d["終了日"] >= month_start))
+        ].copy()
+
+        if active.empty:
+            continue
+
+        active["monthly_amount"] = active.apply(
+            lambda r: r["金額"] if "毎月" in str(r["サイクル"]) else (r["金額"] / 12.0 if "毎年" in str(r["サイクル"]) else r["金額"]),
+            axis=1
+        )
+
+        out[m] = float(active["monthly_amount"].sum())
+
+    return out
+
+def estimate_emergency_fund(df_params, df_fix, df_forms, today):
+    n = get_latest_parameter(df_params, "生活防衛費係数（月のN数）", today)
+    try:
+        n_months = int(float(n))
+    except Exception:
+        n_months = 6
+
+    months = build_month_list(today, months_back=12)
+    fix_s = monthly_fix_cost_series(df_fix, months)
+    var_s = monthly_variable_cost_series(df_forms, months)
+    total_s = fix_s + var_s
+
+    nonzero = total_s[total_s > 0]
+    if len(nonzero) == 0:
+        base = float(calculate_monthly_fix_cost(df_fix, today) + calculate_monthly_variable_cost(df_forms, today))
+        p75 = base
+        method = "暫定（今月のみ）"
+    else:
+        base = float(nonzero.median())
+        p75 = float(nonzero.quantile(0.75))
+        method = f"過去{int(len(nonzero))}か月（中央値・P75）"
+
+    min_months = 3
+    comfort_months = 9
+
+    fund_min = base * min_months
+    fund_rec = base * n_months
+    fund_comfort = p75 * comfort_months
+
+    return {
+        "months_factor": n_months,
+        "method": method,
+        "monthly_est_median": base,
+        "monthly_est_p75": p75,
+        "fund_min": float(fund_min),
+        "fund_rec": float(fund_rec),
+        "fund_comfort": float(fund_comfort),
+        "series_fix": fix_s,
+        "series_var": var_s,
+        "series_total": total_s,
+    }
+
+# ==================================================
+# Goals関連関数
+# ==================================================
+def convert_to_jpy_stub(amount, currency, date=None):
+    try:
+        a = float(amount)
+    except Exception:
+        return None
+
+    c = str(currency).strip().upper() if currency is not None else "JPY"
+    if c in ("JPY", ""):
+        return a
+    return a
+
+def months_until(today, deadline):
+    if pd.isna(deadline):
+        return 1
+    t = pd.Period(pd.to_datetime(today), freq="M")
+    d = pd.Period(pd.to_datetime(deadline), freq="M")
+    diff = (d - t).n
+    return int(max(diff, 1))
+
+def classify_distance_bucket(today, deadline):
+    m = months_until(today, deadline)
+    years = m / 12.0
+    # config参照
+    if years <= config.NEAR_YEARS:
+        return "near"
+    if years <= config.MID_YEARS:
+        return "mid"
+    return "long"
+
+def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
+    if df_goals is None or df_goals.empty:
+        return {}, {}, pd.DataFrame()
+
+    required_cols = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
+    for col in required_cols:
+        if col not in df_goals.columns:
+            return {}, {}, pd.DataFrame()
+
+    df = df_goals.copy()
+    
+    if "支払済" in df.columns:
+        df = df[~df["支払済"]]
+
+    df["達成期限"] = pd.to_datetime(df["達成期限"], errors="coerce")
+    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
+    
+    df = df.dropna(subset=["達成期限", "金額"])
+    horizon_dt = pd.to_datetime(today).normalize() + pd.DateOffset(years=int(max(horizon_years, 1)))
+    
+    df = df[(df["達成期限"] >= pd.to_datetime(today).normalize()) & (df["達成期限"] <= horizon_dt)]
+
+    if only_required and "優先度" in df.columns:
+        df = df[df["優先度"].astype(str).str.contains("必須", na=False)]
+
+    if df.empty:
+        return {}, {}, pd.DataFrame()
+
+    df["month"] = df["達成期限"].dt.to_period("M").astype(str)
+    df["bucket"] = df["達成期限"].apply(lambda x: classify_distance_bucket(today, x))
+
+    outflows_by_month = {}
+    targets_by_month = {}
+
+    rows_norm = []
+    for _, r in df.iterrows():
+        name = str(r["目標名"])
+        typ = str(r["タイプ"]).strip()
+        prio = str(r["優先度"]).strip()
+        m = str(r["month"])
+        bucket = str(r["bucket"])
+
+        amt = convert_to_jpy_stub(r["金額"], r["通貨"], r["達成期限"])
+        if amt is None:
+            continue
+
+        item = {
+            "name": name,
+            "amount": float(amt),
+            "priority": prio,
+            "deadline": r["達成期限"],
+            "bucket": bucket,
+        }
+
+        rows_norm.append(item | {"type": typ, "month": m})
+
+        outflows_by_month.setdefault(m, []).append(item)
+        
+        if typ == "目標":
+            targets_by_month.setdefault(m, []).append(item)
+
+    df_norm = pd.DataFrame(rows_norm)
+    return outflows_by_month, targets_by_month, df_norm
+
+def goals_log_monthly_actual(df_goals_log, today):
+    if df_goals_log is None or df_goals_log.empty:
+        return 0.0
+    if "月_dt" not in df_goals_log.columns:
+        return 0.0
+
+    cur = pd.to_datetime(today).to_period("M")
+    d = df_goals_log.copy()
+    d = d.dropna(subset=["月_dt"])
+    d["month"] = d["月_dt"].dt.to_period("M")
+    d = d[d["month"] == cur]
+    if d.empty:
+        return 0.0
+    return float(d["積立額"].sum())
+
+def goals_log_cumulative(df_goals_log):
+    if df_goals_log is None or df_goals_log.empty:
+        return 0.0
+    if "積立額" not in df_goals_log.columns:
+        return 0.0
+    return float(pd.to_numeric(df_goals_log["積立額"], errors="coerce").fillna(0).sum())
+
+def allocate_goals_progress(df_goals_norm, total_saved):
+    if df_goals_norm is None or df_goals_norm.empty:
+        return pd.DataFrame()
+
+    d = df_goals_norm.copy()
+    
+    if d.empty:
+        return pd.DataFrame()
+
+    bucket_order = {"near": 0, "mid": 1, "long": 2}
+    d["bucket_order"] = d["bucket"].map(lambda x: bucket_order.get(str(x), 9))
+    d = d.sort_values(["bucket_order", "deadline", "name"])
+
+    remain = float(max(total_saved, 0.0))
+    achieved = []
+    for _, r in d.iterrows():
+        goal_amt = float(r["amount"])
+        use = min(remain, goal_amt)
+        remain -= use
+        achieved.append(use)
+
+    d["achieved_amount"] = achieved
+    d["remaining_amount"] = (d["amount"] - d["achieved_amount"]).clip(lower=0.0)
+    d["achieved_rate"] = d.apply(lambda r: 0.0 if r["amount"] <= 0 else float(r["achieved_amount"] / r["amount"]), axis=1)
+
+    return d
+
+def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
+    if df_goals_progress is None or df_goals_progress.empty:
+        return 0.0, pd.DataFrame()
+
+    # config参照
+    state = config.STATE_COEF_EMERGENCY_NOT_MET if emergency_not_met else 1.0
+
+    d = df_goals_progress.copy()
+    d["months_left"] = d["deadline"].apply(lambda x: months_until(today, x))
+    d["min_pmt"] = d.apply(lambda r: 0.0 if r["remaining_amount"] <= 0 else float(r["remaining_amount"] / max(int(r["months_left"]), 1)), axis=1)
+    
+    # config参照
+    d["dist_coef"] = d["bucket"].apply(lambda b: float(config.DIST_COEF.get(str(b), 1.0)))
+
+    d["plan_pmt"] = d.apply(
+        lambda r: 0.0 if r["remaining_amount"] <= 0 else float(r["min_pmt"] * (1.0 + (state - 1.0) * r["dist_coef"])),
+        axis=1
+    )
+
+    total = float(d["plan_pmt"].sum())
+    return total, d
+
+# ==================================================
+# 今月サマリー & NISA係数
+# ==================================================
+def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
+    base_income = to_float_safe(get_latest_parameter(df_params, "月収", today), default=0.0)
+    variable_income = calculate_monthly_variable_income(df_forms, today)
+    monthly_income = base_income + variable_income
+
+    fix_cost = calculate_monthly_fix_cost(df_fix, today)
+    variable_cost = calculate_monthly_variable_cost(df_forms, today)
+
+    available_cash = max(monthly_income - fix_cost - variable_cost, 0.0)
+
+    current_total_asset = get_latest_total_asset(df_balance)
+    current_bank = get_latest_bank_balance(df_balance) or 0.0
+    current_nisa = get_latest_nisa_balance(df_balance) or 0.0
+
+    return {
+        "monthly_income": float(monthly_income),
+        "base_income": float(base_income),
+        "variable_income": float(variable_income),
+        "fix_cost": float(fix_cost),
+        "variable_cost": float(variable_cost),
+        "available_cash": float(available_cash),
+        "current_total_asset": float(current_total_asset),
+        "current_bank": float(current_bank),
+        "current_nisa": float(current_nisa),
+    }
+
+def compute_nisa_coefficient(
+    *,
+    available_cash_after_goals,
+    emergency_not_met,
+    emergency_is_danger,
+    goals_shortfall,
+):
+    if available_cash_after_goals <= 0:
+        return 0.0, "赤字またはGoals後に余剰なし → NISA 0"
+    if goals_shortfall:
+        return 0.0, "Goals積立が不足 → NISA 0"
+    if emergency_is_danger:
+        return 0.0, "生活防衛費 危険ゾーン → NISA 0"
+    if emergency_not_met:
+        return 0.0, "生活防衛費 未達 → NISA 0（2段階）"
+    return 1.0, "条件OK → NISA 100%"
+
+# ==================================================
+# FI / SWR 計算
+# ==================================================
+def compute_fi_required_asset(monthly_spend, swr_assumption):
+    annual = float(monthly_spend) * 12.0
+    swr = float(swr_assumption)
+    if swr <= 0:
+        return float("inf")
+    return float(annual / swr)
+
+def compute_current_swr(monthly_spend, investable_asset):
+    annual = float(monthly_spend) * 12.0
+    a = float(investable_asset)
+    if a <= 0:
+        return None
+    return float(annual / a)
+
+# ==================================================
+# シミュレーション関連
+# ==================================================
+def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
+    pv = float(pv)
+    fv_target = float(fv_target)
+    n = int(max(n_months, 1))
+
+    if r_month <= 0:
+        return max((fv_target - pv) / n, 0.0)
+
+    a = (1 + r_month) ** n
+    denom = (a - 1) / r_month
+    pmt = (fv_target - pv * a) / denom
+    return max(float(pmt), 0.0)
+
+def apply_outflow_three_pockets(goals_fund, emergency_cash, nisa, outflow):
+    goals_fund = float(goals_fund)
+    emergency_cash = float(emergency_cash)
+    nisa = float(nisa)
+    outflow = float(outflow)
+
+    used_goals = min(goals_fund, outflow)
+    goals_fund -= used_goals
+    remain = outflow - used_goals
+
+    used_em = min(emergency_cash, remain)
+    emergency_cash -= used_em
+    remain2 = remain - used_em
+
+    used_nisa = min(nisa, remain2)
+    nisa -= used_nisa
+
+    unpaid = remain2 - used_nisa
+    return goals_fund, emergency_cash, nisa, used_goals, used_em, used_nisa, unpaid
+
+def estimate_realistic_monthly_contribution(df_balance, months=6):
+    if df_balance is None or df_balance.empty:
+        return 0.0
+
+    df = df_balance.copy()
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
+    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce")
+    df = df.dropna(subset=["日付"]).sort_values("日付")
+    if df.empty or len(df) < 2:
+        return 0.0
+
+    df["total"] = df["銀行残高"].fillna(0) + df["NISA評価額"].fillna(0)
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+    monthly_last = df.groupby("month", as_index=False)["total"].last()
+    monthly_last["diff"] = monthly_last["total"].diff()
+    diffs = monthly_last["diff"].dropna().tail(months)
+
+    if diffs.empty:
+        return 0.0
+    return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+
+def simulate_fi_paths(
+    *,
+    today,
+    current_age,
+    end_age,
+    annual_return,
+    current_emergency_cash,
+    current_goals_fund,
+    current_nisa,
+    monthly_emergency_save_real,
+    monthly_goals_save_real,
+    monthly_nisa_save_real,
+    fi_target_asset,
+    outflows_by_month,
+    ef_rec,
+):
+    r = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
+
+    months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
+    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
+
+    pv_investable = float(current_emergency_cash) + float(current_nisa)
+    ideal_pmt_investable = solve_required_monthly_pmt(
+        pv=pv_investable,
+        fv_target=float(fi_target_asset),
+        r_month=r,
+        n_months=months_left
+    )
+
+    ideal_nisa_ratio = 0.8
+
+    em = float(current_emergency_cash)
+    gf = float(current_goals_fund)
+    ni = float(current_nisa)
+
+    em_i = float(current_emergency_cash)
+    gf_i = float(current_goals_fund)
+    ni_i = float(current_nisa)
+
+    rows = []
+    for i, dt in enumerate(dates):
+        month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
+
+        items = outflows_by_month.get(month_key, [])
+        outflow = float(sum(x["amount"] for x in items)) if items else 0.0
+        outflow_name = ""
+        if items:
+            names = [x["name"] for x in items]
+            outflow_name = " / ".join(names[:3]) + (" …" if len(names) > 3 else "")
+
+        unpaid_real = 0.0
+        if outflow > 0:
+            gf, em, ni, _, _, _, unpaid_real = apply_outflow_three_pockets(gf, em, ni, outflow)
+
+        unpaid_ideal = 0.0
+        if outflow > 0:
+            gf_i, em_i, ni_i, _, _, _, unpaid_ideal = apply_outflow_three_pockets(gf_i, em_i, ni_i, outflow)
+
+        total_real = gf + em + ni
+        investable_real = em + ni
+
+        total_ideal = gf_i + em_i + ni_i
+        investable_ideal = em_i + ni_i
+
+        fi_ok_real = (investable_real >= float(fi_target_asset)) and (em >= float(ef_rec))
+        fi_ok_ideal = (investable_ideal >= float(fi_target_asset)) and (em_i >= float(ef_rec))
+
+        rows.append({
+            "date": dt,
+            "total_real": total_real,
+            "investable_real": investable_real,
+            "emergency_real": em,
+            "goals_fund_real": gf,
+            "nisa_real": ni,
+
+            "total_ideal": total_ideal,
+            "investable_ideal": investable_ideal,
+            "emergency_ideal": em_i,
+            "goals_fund_ideal": gf_i,
+            "nisa_ideal": ni_i,
+
+            "outflow": outflow,
+            "outflow_name": outflow_name,
+            "unpaid_real": unpaid_real,
+            "unpaid_ideal": unpaid_ideal,
+
+            "fi_ok_real": fi_ok_real,
+            "fi_ok_ideal": fi_ok_ideal,
+
+            "ideal_pmt_investable": ideal_pmt_investable,
+        })
+
+        if i == len(dates) - 1:
+            break
+
+        em = em + float(monthly_emergency_save_real)
+        gf = gf + float(monthly_goals_save_real)
+        ni = (ni + float(monthly_nisa_save_real)) * (1 + r)
+
+        gf_i = gf_i + float(monthly_goals_save_real)
+
+        add_nisa = float(ideal_pmt_investable) * float(ideal_nisa_ratio)
+        add_em = float(ideal_pmt_investable) * (1.0 - float(ideal_nisa_ratio))
+
+        em_i = em_i + add_em
+        ni_i = (ni_i + add_nisa) * (1 + r)
+
+    df_sim = pd.DataFrame(rows)
+    return df_sim
