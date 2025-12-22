@@ -192,14 +192,18 @@ def main():
     # これがプラスなら、赤字の月でもここからNISAを出して良い
     stock_surplus = max(bank_balance - saved_goals_total - emergency_target, 0.0)
 
-    # 現実的な配分計算（Logic V3）
+    # 現実的な配分計算（Logic V4）
     available_cash = float(summary["available_cash"])
     
+    # ef辞書の中に P75 の値が入っています
+    monthly_p75 = float(ef["monthly_est_p75"])
+
     allocation = lg.allocate_monthly_budget(
         available_cash=available_cash,
         df_goals_plan_detail=df_goals_plan_detail, 
         emergency_not_met=emergency_not_met,
-        stock_surplus=stock_surplus  # ★ここに追加！
+        stock_surplus=stock_surplus,
+        monthly_spend_p75=monthly_p75  # ★ここに追加！
     )
 
     nisa_save = allocation["nisa_save"]
@@ -649,4 +653,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
