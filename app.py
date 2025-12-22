@@ -161,7 +161,6 @@ def main():
     emergency_is_danger = bank_balance < float(ef["fund_min"])
     emergency_not_met = bank_balance < float(ef["fund_rec"])
     
-    # ★修正：赤字判定（deficit）をここで先に計算しておく
     deficit = lg.analyze_deficit(summary["monthly_income"], summary["fix_cost"], summary["variable_cost"])
 
     # 4. Goals計算
@@ -176,34 +175,29 @@ def main():
 
     df_goals_progress = lg.allocate_goals_progress(df_goals_norm, actual_goals_cum)
 
-    # ... (前略)
-    
     # 理想額の計算
     goals_save_plan_ideal, df_goals_plan_detail = lg.compute_goals_monthly_plan(
         df_goals_progress, today,
         emergency_not_met=emergency_not_met
     )
 
-    # ★追加：資産余剰（緑色のバー）を先に計算する
+    # 緑色の余剰計算
     saved_goals_total = lg.goals_log_cumulative(df_goals_log)
     emergency_target = float(ef["fund_rec"])
-    
-    # 余剰 = 銀行残高 - Goals預かり - 防衛費推奨額
-    # これがプラスなら、赤字の月でもここからNISAを出して良い
     stock_surplus = max(bank_balance - saved_goals_total - emergency_target, 0.0)
-
-    # 現実的な配分計算（Logic V4）
-    available_cash = float(summary["available_cash"])
     
-    # ef辞書の中に P75 の値が入っています
+    # 生活費P75の取得
     monthly_p75 = float(ef["monthly_est_p75"])
 
+    # 現実的な配分計算（Logic V4: Auto-Buffer）
+    available_cash = float(summary["available_cash"])
+    
     allocation = lg.allocate_monthly_budget(
         available_cash=available_cash,
         df_goals_plan_detail=df_goals_plan_detail, 
         emergency_not_met=emergency_not_met,
         stock_surplus=stock_surplus,
-        monthly_spend_p75=monthly_p75  # ★ここに追加！
+        monthly_spend_p75=monthly_p75 
     )
 
     nisa_save = allocation["nisa_save"]
@@ -220,25 +214,16 @@ def main():
     st.subheader("📌 KPI（今月）")
     k1, k2, k3, k4 = st.columns(4)
     
-    # 銀行積立の表示ロジック
-    if emergency_not_met:
-        k1.metric(
-            "🏦 銀行積立", 
-            f"{bank_save:,} 円",
-            help=f"防衛費が未達のため、最低 {config.MIN_BANK_AMOUNT:,} 円を確保しようとしています。"
-        )
-    else:
-        k1.metric(
-            "🏦 銀行積立", 
-            "✅ 完了",
-            help="生活防衛費が目標に達しているため、これ以上の積立は不要です。"
-        )
+    k1.metric(
+        "🏦 銀行積立", 
+        f"{bank_save:,} 円",
+        help=f"最低確保額（{config.MIN_BANK_AMOUNT:,}円）を含みます。"
+    )
     
-    # NISA積立の表示ロジック
     nisa_help = f"最低確保額（{config.MIN_NISA_AMOUNT:,}円）。"
     if available_cash <= 0 and nisa_save > 0:
         nisa_help += "\n\n★今月は赤字ですが、銀行の余剰資金を活用して積み立てます（ナイス判断！）。"
-        
+
     k2.metric(
         "📈 NISA積立", 
         f"{nisa_save:,} 円",
@@ -250,7 +235,7 @@ def main():
         f"{goals_save_actual:,} 円",
         delta=f"-{goals_shortfall:,} 円 (繰越)" if goals_shortfall > 0 else "Plan OK",
         delta_color="off", 
-        help=f"理想額：{goals_ideal_total:,} 円\n\n今の収入で払える分だけを、期限が近いGoalsから優先して埋めています。"
+        help=f"理想額：{goals_ideal_total:,} 円\n\n今の収入で払える分だけを、期限が近いGoals（博士1年目など）から優先して埋めています。不足分は将来回収します。"
     )
     
     k4.metric(
@@ -317,16 +302,14 @@ def main():
     st.caption(f"※ 現在資産：{int(summary['current_total_asset']):,} 円（銀行 {int(bank_balance):,} / NISA {int(nisa_balance):,}）")
 
     # ==================================================
-    # 🏦 銀行口座の「仮想内訳」見える化 (Improved)
+    # 🏦 銀行口座の「仮想内訳」見える化
     # ==================================================
     st.subheader("🏦 銀行口座の中身（仮想内訳）")
 
-    # 1. 計算の基礎データ
-    saved_goals_total = lg.goals_log_cumulative(df_goals_log) 
-    current_bank_real = bank_balance                          
-    emergency_target = float(ef["fund_rec"])                  
-
-    # 2. 3層構造の計算
+    # 変数は上で計算済み (stock_surplusなど)
+    current_bank_real = bank_balance
+    
+    # 3層構造の計算
     val_goals = min(current_bank_real, saved_goals_total)
     remaining_1 = current_bank_real - val_goals
 
@@ -335,7 +318,7 @@ def main():
 
     val_surplus = remaining_2
 
-    # 3. グラフ表示
+    # グラフ表示
     fig_bd = go.Figure()
 
     # レイヤー1: Goals
@@ -372,7 +355,6 @@ def main():
         st.plotly_chart(fig_bd, use_container_width=True, key="bank_breakdown_v2")
 
     with col_bd2:
-        # 判定ロジック
         if current_bank_real < saved_goals_total:
             st.error("🚨 警告：Goals浸食")
             st.caption(f"Goals資金を {int(saved_goals_total - current_bank_real):,} 円 使い込んでいます。至急補填が必要です。")
@@ -384,7 +366,6 @@ def main():
             st.info(f"🛡️ 防衛費構築中 ({pct}%)")
             st.caption(f"Goalsは確保済。\n防衛費満タンまであと {int(emergency_target - val_emergency):,} 円")
 
-        # フロー（赤字）判定による警告
         if deficit is not None:
             st.warning(f"⚠️ 今月は取り崩し中")
             st.caption(f"残高はありますが、今月は資産が {int(deficit['total_deficit']):,} 円 減っています。")
@@ -653,5 +634,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
