@@ -514,70 +514,28 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     }
     
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
-    """
-    収入の範囲内で配分する。
-    ただし、「バッファ目標」を超えた余剰資金（真の余剰）がある場合は、
-    今月の収入がなくても、そこからNISAやGoalsにお金を回す（資産のラベル貼り替え）。
-    """
-    remaining_flow = float(available_cash) # 今月の収入（フロー）からの残り
-    
-    # 1. 安全ラインの計算
-    # ----------------------------------------------------
-    base_spend = monthly_spend_p75 if monthly_spend_p75 > 0 else 200000
-    buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
+    # ... (前略：バッファ計算まではそのまま)
     
     # 「真の余剰（Excess Wealth）」を計算
-    # ストック余剰のうち、バッファ目標を超えている分だけが「自由に使っていいお金」
     excess_wealth = max(stock_surplus - buffer_target, 0.0)
 
-    # 2. 聖域（ミニマム積立）の確保
     # ----------------------------------------------------
-    req_bank = 0.0
-    # バッファが足りないなら、フローから銀行積立を試みる
-    if emergency_not_met or (stock_surplus < buffer_target):
-        req_bank = config.MIN_BANK_AMOUNT
-    
-    req_nisa = config.MIN_NISA_AMOUNT
-    
-    bank_alloc = 0.0
-    nisa_alloc = 0.0
-    
-    # 配分ロジック（フロー優先、足りなければストック）
-    
-    # A. まず銀行積立（これはフローから出すのが基本）
-    if remaining_flow >= req_bank:
-        bank_alloc = req_bank
-        remaining_flow -= bank_alloc
-    else:
-        # フローで足りないなら、あるだけ入れる
-        bank_alloc = remaining_flow
-        remaining_flow = 0.0
-        
-    # B. 次にNISA（フローから、足りなければ真の余剰から）
-    needed_for_nisa = req_nisa
-    
-    # フローから出す
-    from_flow = min(remaining_flow, needed_for_nisa)
-    nisa_alloc += from_flow
-    remaining_flow -= from_flow
-    needed_for_nisa -= from_flow
-    
-    # 足りない分を「真の余剰」から補填
-    if needed_for_nisa > 0 and excess_wealth > 0:
-        from_stock = min(excess_wealth, needed_for_nisa)
-        nisa_alloc += from_stock
-        excess_wealth -= from_stock # 余剰を使ったので減らす
+    # ストックからの供給能力（ランウェイ計算）
+    # ----------------------------------------------------
+    # 余剰金を「設定月数」で割った金額を、今月ストックから出せる上限とする
+    months_div = config.STOCK_TRANSFER_DURATION_MONTHS if config.STOCK_TRANSFER_DURATION_MONTHS > 0 else 1
+    stock_transfer_capacity = excess_wealth / months_div
 
-    # 3. Goalsへの配分（フローから、足りなければ真の余剰から）
+    # ... (中略：聖域の確保、NISA計算などはそのまま)
+    
+    # ----------------------------------------------------
+    # 3. Goalsへの配分（フロー優先、足りなければストックから）
     # ----------------------------------------------------
     total_goals_alloc = 0.0
     
     if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
-        if "bucket_order" not in df_goals_plan_detail.columns:
-             bucket_map = {"near": 0, "mid": 1, "long": 2}
-             df_goals_plan_detail["bucket_order"] = df_goals_plan_detail["bucket"].map(lambda x: bucket_map.get(str(x), 9))
+        # ... (ソート処理などはそのまま)
         
-        # 優先順に埋めていく
         targets = df_goals_plan_detail.sort_values(["bucket_order", "deadline"])
         
         for _, row in targets.iterrows():
@@ -585,28 +543,30 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
             if ideal <= 0:
                 continue
             
-            # まずフローの残りで埋める
+            # A. まずフロー（収入）の残りで埋める
             pay_flow = min(remaining_flow, ideal)
             remaining_flow -= pay_flow
             ideal -= pay_flow
             
-            # ★修正点：まだ足りなくて、真の余剰があるなら、そこから埋める！
+            # B. まだ足りなくて、真の余剰があるなら、そこから埋める
+            # ★修正点：上限は「期間按分した金額」
             pay_stock = 0.0
-            if ideal > 0 and excess_wealth > 0:
-                pay_stock = min(excess_wealth, ideal)
-                excess_wealth -= pay_stock
+            if ideal > 0 and excess_wealth > 0 and stock_transfer_capacity > 0:
+                # 「必要な額」「余剰全額」「今月の転送枠(按分額)」の3つの中で最小のものを採用
+                pay_stock = min(ideal, excess_wealth, stock_transfer_capacity)
+                
+                excess_wealth -= pay_stock           # 余剰残高を減らす
+                stock_transfer_capacity -= pay_stock # 今月の転送枠を減らす
             
             total_goals_alloc += (pay_flow + pay_stock)
             
     else:
         total_goals_alloc = 0.0
 
+    # ... (後略)
     goals_plan_ideal = df_goals_plan_detail["plan_pmt"].sum() if (df_goals_plan_detail is not None and not df_goals_plan_detail.empty) else 0.0
     goals_shortfall = float(goals_plan_ideal) - total_goals_alloc
-
-    # 余ったフローの扱い（自由費へ）
-    # (logicでは計算せず、そのまま呼び出し元が available - alloc で計算する)
-
+    
     return {
         "nisa_save": int(nisa_alloc),
         "bank_save": int(bank_alloc),
@@ -614,7 +574,6 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
         "goals_shortfall": int(goals_shortfall),
         "ideal_goals_total": int(goals_plan_ideal)
     }
-
 # ==================================================
 # FI / SWR 計算
 # ==================================================
