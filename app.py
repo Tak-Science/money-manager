@@ -14,7 +14,7 @@ import logic as lg
 st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 
 # ==================================================
-# グラフ描画関数（UIの一部としてここに残します）
+# グラフ描画関数
 # ==================================================
 def plot_asset_trend(df_balance, ef):
     if df_balance is None or df_balance.empty:
@@ -137,21 +137,21 @@ def plot_fi_simulation(df_sim, fi_target_asset, show_ideal, chart_key="fi_sim"):
 def main():
     st.title("💰 今月サマリー")
     
-    # 1. データ読み込み (data_loader経由)
+    # 1. データ読み込み
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
     today = datetime.today()
 
-    # 2. パラメータ取得 (logic経由)
+    # 2. パラメータ取得
     goals_horizon_years = lg.to_int_safe(lg.get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
     swr_assumption = lg.to_float_safe(lg.get_latest_parameter(df_params, "SWR", today), default=0.035)
     end_age = lg.to_float_safe(lg.get_latest_parameter(df_params, "老後年齢", today), default=60.0)
     current_age = lg.to_float_safe(lg.get_latest_parameter(df_params, "現在年齢", today), default=20.0)
     annual_return = lg.to_float_safe(lg.get_latest_parameter(df_params, "投資年利", today), default=0.05)
 
-    # 3. 計算実行 (logic経由)
+    # 3. 計算実行
     summary = lg.calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today)
     ef = lg.estimate_emergency_fund(df_params, df_fix, df_forms, today)
     
@@ -161,7 +161,7 @@ def main():
     emergency_is_danger = bank_balance < float(ef["fund_min"])
     emergency_not_met = bank_balance < float(ef["fund_rec"])
 
-    # 4. Goals計算 (logic経由)
+    # 4. Goals計算
     outflows_by_month, targets_by_month, df_goals_norm = lg.prepare_goals_events(
         df_goals, today,
         only_required=True,
@@ -234,7 +234,6 @@ def main():
 
     s1, s2 = st.columns(2)
 
-    # 生活防衛費ステータス判定
     ef_rec_val = float(ef["fund_rec"])
     ef_min_val = float(ef["fund_min"])
     
@@ -360,8 +359,8 @@ def main():
     # ==================================================
     # Goals（積立詳細 + 円グラフ）
     # ==================================================
-    st.subheader("🎯 Goals（必須）積立の進捗", help="対象：必須のみ / 今日から 5 年先まで")
-    st.caption(f"対象：必須のみ / 今日から {goals_horizon_years} 年先まで")
+    # ★修正：captionを削除し、helpに統一
+    st.subheader("🎯 Goals（必須）積立の進捗", help=f"対象：必須のみ / 今日から {goals_horizon_years} 年先まで")
 
     if df_goals_progress is None or df_goals_progress.empty:
         st.info("対象期間内に必須Goalsがありません。")
@@ -442,8 +441,8 @@ def main():
     # ==================================================
     # FIシミュレーション
     # ==================================================
-    st.subheader("🔮 FIシミュレーション（支出イベント反映）")
-
+    # ★修正：計算ロジックを先に実行し、subheaderのhelpに表示
+    
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
 
     plan_total = float(bank_save + nisa_save + goals_save_plan)
@@ -458,11 +457,15 @@ def main():
     monthly_nisa_save_real = float(real_total_pmt * share_nisa)
     monthly_goals_save_real = float(real_total_pmt * share_goals)
 
-    st.caption(
-        f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月 "
+    # captionだった内容をhelp用のテキストに格納
+    fi_sim_help_text = (
+        f"現実（予測）に使う月次積立（直近平均）：{int(real_total_pmt):,} 円 / 月\n"
         f"（防衛費 {int(monthly_emergency_save_real):,} ・NISA {int(monthly_nisa_save_real):,} ・Goals {int(monthly_goals_save_real):,}）"
     )
 
+    st.subheader("🔮 FIシミュレーション（支出イベント反映）", help=fi_sim_help_text)
+
+    # 計算用パラメータ
     current_goals_fund_est = float(max(actual_goals_cum, 0.0))
     current_emergency_cash_est = float(max(bank_balance - current_goals_fund_est, 0.0))
 
