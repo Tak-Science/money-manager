@@ -513,25 +513,32 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
-# logic.py の allocate_monthly_budget をこれに書き換えてください
-
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus):
     """
-    収入の範囲内で配分するが、
-    フロー（収入）が足りなくても、ストック（資産余剰）があればNISAだけは死守する
+    収入の範囲内で配分する。
+    緑色の余剰が目標額に達するまでは、銀行積立を継続する。
     """
     remaining = float(available_cash)
     
     # 1. 聖域（ミニマム積立）の確保
     # ----------------------------------------------------
-    # A. 銀行積立（生活防衛費）
-    # 防衛費未達なら確保するが、達成済みなら0円でOK（卒業）
-    req_bank = config.MIN_BANK_AMOUNT if emergency_not_met else 0.0
+    # A. 銀行積立（生活防衛費 ＋ 緑のバッファ）
+    # 防衛費が未達、または「緑の余剰」が目標（30万など）未満なら銀行に入れる
+    req_bank = 0.0
+    
+    if emergency_not_met:
+        req_bank = config.MIN_BANK_AMOUNT
+    elif stock_surplus < config.BANK_GREEN_BUFFER_TARGET:
+        # 防衛費は足りてるけど、緑のバッファをもっと厚くしたい
+        req_bank = config.MIN_BANK_AMOUNT
+    else:
+        # 防衛費もバッファも十分すぎるほどある → 銀行積立卒業
+        req_bank = 0.0
     
     # B. NISA積立
-    # 常に確保したい
     req_nisa = config.MIN_NISA_AMOUNT
     
+    # ... (以下、元のコードのまま)
     # 配分計算
     bank_alloc = 0.0
     nisa_alloc = 0.0
