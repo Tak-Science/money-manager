@@ -1169,14 +1169,34 @@ def main():
     free_cash = float(max(available_cash - goals_save_plan - bank_save - nisa_save, 0.0))
 
     # ==================================================
-    # KPI（4 + 2）
+    # KPI（4 + 2）の修正案
     # ==================================================
     st.subheader("📌 KPI（今月）")
     k1, k2, k3, k4 = st.columns(4)
-    k1.metric("🏦 銀行積立（防衛費向け）", f"{int(bank_save):,} 円")
-    k2.metric("📈 NISA積立（係数適用）", f"{int(nisa_save):,} 円")
-    k3.metric("🎯 Goals積立（第3積立・必須）", f"{int(goals_save_plan):,} 円")
-    k4.metric("🎉 自由に使えるお金", f"{int(free_cash):,} 円")
+    
+    k1.metric(
+        "🏦 銀行積立", 
+        f"{int(bank_save):,} 円",
+        help="【生活防衛費向け】不測の事態や、直近の大きな出費に備えるための現金貯蓄です。生活防衛費が推奨額に達するまではここが優先されます。"
+    )
+    
+    k2.metric(
+        "📈 NISA積立", 
+        f"{int(nisa_save):,} 円",
+        help="【老後・超長期向け】生活防衛費とGoals積立を満たした後の「余剰資金」のみがここに回ります。係数により自動調整されます。"
+    )
+    
+    k3.metric(
+        "🎯 Goals積立", 
+        f"{int(goals_save_plan):,} 円",
+        help="【将来の必須支出】iPhone買い替えや学費など、期限が決まっている支出のために取り分けておくお金です。これを確保しないと将来困ります。"
+    )
+    
+    k4.metric(
+        "🎉 自由に使えるお金", 
+        f"{int(free_cash):,} 円",
+        help="【趣味・娯楽】上記の積立を全て終えた後に残ったお金です。この金額の範囲内なら、何に使っても将来に影響しません。楽しんで！"
+    )
 
     s1, s2 = st.columns(2)
 
@@ -1487,3 +1507,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
