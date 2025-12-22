@@ -60,7 +60,7 @@ def get_spreadsheet():
     return service.spreadsheets()
 
 # ==================================================
-# データ読み込み（修正版：I1にメモがあっても落ちない最強版）
+# データ読み込み（堅牢版：I1記入例対応）
 # ==================================================
 @st.cache_data(ttl=60)
 def load_data():
@@ -75,19 +75,17 @@ def load_data():
             if not values:
                 return pd.DataFrame()
 
-            # ★ここが修正ポイント：データの「歯抜け」を補正する処理
+            # データの「歯抜け」を補正する処理
             header = values[0]       # 1行目（見出し）
             data = values[1:]        # 2行目以降（中身）
-            n_cols = len(header)     # 見出しの列数（I1まで書いてあれば9になる）
+            n_cols = len(header)     # 見出しの列数
 
             # データ行の長さが足りない場合、Noneで埋めて長さを揃える
-            # これで「見出しは9列、データは6列」でもエラーになりません
             fixed_data = [row + [None] * (n_cols - len(row)) for row in data]
 
             return pd.DataFrame(fixed_data, columns=header)
             
         except Exception as e:
-            # エラー時は空のDataFrameを返してアプリを止めない
             st.error(f"❌ シート「{sheet_name}」読み込みエラー: {e}")
             return pd.DataFrame()
 
@@ -96,7 +94,7 @@ def load_data():
     df_forms   = get_df("Forms_Log",        "A:G")
     df_balance = get_df("Balance_Log",      "A:C")
     
-    # 範囲を A:Z にしておけば、I列以降に何が書いてあっても大丈夫です
+    # 範囲を A:Z にしておけば、I列以降に何が書いてあっても大丈夫
     df_goals   = get_df("Goals",            "A:Z") 
     
     df_goals_log = get_df("Goals_Save_Log","A:D")
@@ -146,23 +144,21 @@ def preprocess_data(df_params, df_fix, df_forms, df_balance, df_goals, df_goals_
 
     # Goals
     if df_goals is not None and (not df_goals.empty):
-        # ★追加：列名の空白を除去（"目標名 "などを防ぐ）
+        # 列名の空白を除去
         df_goals.columns = df_goals.columns.str.strip()
 
         if "達成期限" in df_goals.columns:
             df_goals["達成期限"] = pd.to_datetime(df_goals["達成期限"], errors="coerce")
         
         if "金額" in df_goals.columns:
-            # ★修正：カンマや円記号を除去してから数値変換（"1,000,000" -> 1000000）
+            # カンマや円記号を除去してから数値変換
             df_goals["金額"] = df_goals["金額"].astype(str).str.replace(",", "").str.replace("¥", "").str.replace("円", "")
             df_goals["金額"] = pd.to_numeric(df_goals["金額"], errors="coerce")
 
-        # ★追加：支払済列の処理
+        # 支払済列の処理
         if "支払済" in df_goals.columns:
-            # 文字列の "TRUE", "True", "true" を True に変換
             df_goals["支払済"] = df_goals["支払済"].astype(str).str.strip().str.upper() == "TRUE"
         else:
-            # 列がない場合は全て未払いとする
             df_goals["支払済"] = False
 
     # Goals_Save_Log（実績）
@@ -535,7 +531,7 @@ def classify_distance_bucket(today, deadline):
     return "long"
 
 # ==================================================
-# Goals：イベント化（修正完了版）
+# Goals：イベント化（支出も目標も含む完全版）
 # ==================================================
 def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
     if df_goals is None or df_goals.empty:
@@ -598,8 +594,7 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
 
         rows_norm.append(item | {"type": typ, "month": m})
 
-        # ★修正：タイプに関わらず、FIシミュレーション上は「支出イベント」として登録する
-        # （これによりFIチャートでガクンと資産が減るのが見えるようになります）
+        # タイプに関わらず、FIシミュレーション上は「支出イベント」として登録
         outflows_by_month.setdefault(m, []).append(item)
         
         # 念のため分別も維持
@@ -608,6 +603,7 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
 
     df_norm = pd.DataFrame(rows_norm)
     return outflows_by_month, targets_by_month, df_norm
+
 # ==================================================
 # Goals：実績（Goals_Save_Log）集計
 # ==================================================
@@ -642,8 +638,7 @@ def allocate_goals_progress(df_goals_norm, total_saved):
 
     d = df_goals_norm.copy()
     
-    # ❌ 削除（これが犯人でした！支出も積立対象にします）
-    # d = d[d["type"] != "支出"].copy() 
+    # 支出も積立対象とするため、フィルタを除去しました
     
     # データが空なら戻る
     if d.empty:
@@ -1052,73 +1047,11 @@ def plot_goal_pie(title, achieved, total, key=None):
 # ==================================================
 def main():
     st.title("💰 今月サマリー")
-    # main()関数内の st.title の下あたりに追加してください
     
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
-# ==================================================
-    # 🔧 デバッグ：フィルタ落ちの原因チェッカー
-    # ==================================================
-    with st.expander("🔧 デバッグ：Goalsが表示されない理由を特定する", expanded=True):
-        if df_goals is None or df_goals.empty:
-            st.error("データ自体が空です")
-        else:
-            st.write("### 1. データの状態チェック")
-            # コピーを作成して検証
-            check = df_goals.copy()
-            
-            # 1. 支払済チェック
-            check["is_paid"] = check["支払済"]
-            
-            # 2. 金額チェック
-            # preprocess_dataですでに数値化されている前提
-            check["amount_ok"] = check["金額"].notna() & (check["金額"] > 0)
-            
-            # 3. 日付チェック（NaTじゃないか）
-            check["date_ok"] = check["達成期限"].notna()
-            
-            # 4. 未来日付チェック
-            # 今日
-            today_ts = pd.to_datetime(datetime.today()).normalize()
-            check["is_future"] = check["達成期限"] >= today_ts
-            
-            # 5. 必須チェック
-            check["is_required"] = check["優先度"].astype(str).str.contains("必須", na=False)
-
-            # 結果を表示
-            st.dataframe(check[["目標名", "達成期限", "金額", "is_paid", "date_ok", "is_future", "is_required"]])
-            
-            st.write("### 判定結果")
-            if check["is_paid"].any():
-                st.warning(f"・支払済で除外: {check['is_paid'].sum()} 件")
-            
-            if (~check["date_ok"]).any():
-                st.error(f"・日付読み取り失敗(NaT)で除外: {(~check['date_ok']).sum()} 件 → スプレッドシートの日付形式を確認してください")
-                
-            if (~check["amount_ok"]).any():
-                st.error(f"・金額なし/0円で除外: {(~check['amount_ok']).sum()} 件")
-
-            # ここが怪しい！
-            past_items = check[check["date_ok"] & (~check["is_future"])]
-            if not past_items.empty:
-                st.warning(f"・【重要】日付が過去（今日以前）のため除外: {len(past_items)} 件")
-                st.write(past_items["目標名"].tolist())
-
-            valid_items = check[
-                (~check["is_paid"]) & 
-                check["date_ok"] & 
-                check["amount_ok"] & 
-                check["is_future"] & 
-                check["is_required"]
-            ]
-            
-            if valid_items.empty:
-                st.error("😭 全てのフィルタを通ったデータが 0件 です。")
-            else:
-                st.success(f"✅ 表示可能なデータが {len(valid_items)} 件 あります！")
-    #=========デバック終了
     today = datetime.today()
 
     goals_horizon_years = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
@@ -1169,7 +1102,7 @@ def main():
     free_cash = float(max(available_cash - goals_save_plan - bank_save - nisa_save, 0.0))
 
     # ==================================================
-    # KPI（4 + 2）の修正案
+    # KPI（4 + 2）解説付き（help）
     # ==================================================
     st.subheader("📌 KPI（今月）")
     k1, k2, k3, k4 = st.columns(4)
@@ -1507,4 +1440,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
