@@ -1033,6 +1033,46 @@ def plot_goal_pie(title, achieved, total, key=None):
 # ==================================================
 def main():
     st.title("💰 今月サマリー")
+    # main()関数内の st.title の下あたりに追加してください
+    
+    # === 🛠️ デバッグモード開始 ===
+    with st.expander("🔧 デバッグ：なぜGoalsが消えるのか確認する", expanded=True):
+        st.write("### 1. 生データの読み込み状況")
+        st.write(f"行数: {len(df_goals)}")
+        st.dataframe(df_goals) # ここで「達成期限」が NaT になっていないか、「金額」が NaN になっていないか見る
+
+        # 列名の確認
+        st.write("### 2. 認識されている列名")
+        st.write(list(df_goals.columns))
+
+        # フィルタリングのテスト
+        try:
+            test_df = df_goals.copy()
+            st.write("### 3. フィルタ通過テスト")
+            
+            # 支払済チェック
+            if "支払済" in test_df.columns:
+                paid_count = test_df["支払済"].sum()
+                st.write(f"- 支払済として除外される数: {paid_count} 件")
+                test_df = test_df[~test_df["支払済"]]
+            
+            # 日付パースチェック
+            if "達成期限" in test_df.columns:
+                nat_count = test_df["達成期限"].isna().sum()
+                if nat_count > 0:
+                    st.error(f"⚠️ {nat_count} 件のデータで「達成期限」の日付読み取りに失敗しています！（NaT表示）")
+                    st.write("対策：スプレッドシートの日付を '2026/01/01' 形式に書き直してください")
+            
+            # 優先度チェック
+            if "優先度" in test_df.columns:
+                prio_count = test_df["優先度"].astype(str).str.contains("必須").sum()
+                st.write(f"- 「必須」が含まれるデータ数: {prio_count} 件")
+                if prio_count == 0:
+                    st.warning("⚠️ 「必須」データが見つかりません。優先度列に余計な空白がないか確認してください")
+
+        except Exception as e:
+            st.error(f"デバッグ中にエラー発生: {e}")
+    # === 🛠️ デバッグモード終了 ===
 
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
@@ -1406,3 +1446,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
