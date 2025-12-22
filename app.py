@@ -202,11 +202,13 @@ def main():
 
     nisa_save = allocation["nisa_save"]
     bank_save = allocation["bank_save"]
-    goals_save_actual = allocation["goals_save"]
+    # goals_save_actual は「計画値（Logic計算）」なので、ここではシミュレーション用として保持
+    goals_save_plan_calc = allocation["goals_save"]
+    
     goals_shortfall = allocation["goals_shortfall"]
     goals_ideal_total = allocation["ideal_goals_total"]
     
-    free_cash = max(available_cash - nisa_save - bank_save - goals_save_actual, 0.0)
+    free_cash = max(available_cash - nisa_save - bank_save - goals_save_plan_calc, 0.0)
 
     # ==================================================
     # KPI表示
@@ -230,26 +232,19 @@ def main():
         help=nisa_help
     )
     
-    # 3. Goals積立可能枠（ランウェイ方式に修正）
+    # 3. Goals積立可能枠（計算：Plan）
     # ----------------------------------------------------
-    # A. バッファ目標額（生活費P75 × 1.5ヶ月）
     buffer_target_val = monthly_p75 * config.BANK_GREEN_BUFFER_MONTHS
-    
-    # B. ストックからの供出可能額（真の余剰）
     excess_wealth_for_goals = max(stock_surplus - buffer_target_val, 0.0)
     
-    # C. ストックからの供出上限（ランウェイ方式）
-    # 割り算をして「今月使っていい上限」を決める
     months_div = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 12
     capped_stock_surplus = excess_wealth_for_goals / months_div if months_div > 0 else 0
     
-    # D. フローからの供出可能額（今月の収入余剰）
     current_flow_surplus = max(available_cash - nisa_save - bank_save, 0.0)
     
-    # E. 実際の枠 = フロー余剰 + キャップ付きストック余剰
+    # これが「今月積立すべき金額（Plan）」
     real_goals_capacity = current_flow_surplus + capped_stock_surplus
     
-    # Help情報の計算
     total_power = excess_wealth_for_goals + current_flow_surplus
     gap_to_buffer = max(buffer_target_val - stock_surplus, 0.0)
 
@@ -276,32 +271,38 @@ def main():
         help=help_text
     )
     
-    # 4. Goals積立（実績）
-    # ※計算済みの real_goals_capacity を判定に使う
+    # 4. Goals積立（実績：Record）
+    # ★修正：ここは「スプレッドシート（df_goals_log）の記録」を表示する
+    goals_save_recorded = lg.goals_log_monthly_actual(df_goals_log, today)
+    
     if real_goals_capacity > 0:
-        # 実績が枠の99%以上ならFull Power
-        if goals_save_actual >= real_goals_capacity * 0.99:
-            delta_str = "Full Power! 🔥"
+        # 目標（可能枠）に対する達成度を表示
+        diff = goals_save_recorded - real_goals_capacity
+        
+        # ほぼ達成（99%以上）ならOK
+        if goals_save_recorded >= real_goals_capacity * 0.99:
+            delta_str = "目標達成！ 🎉"
             delta_color = "normal"
         else:
-            remain = real_goals_capacity - goals_save_actual
-            delta_str = f"あと {int(remain):,} 円 OK"
-            delta_color = "off"
+            # 未達
+            remaining_to_save = real_goals_capacity - goals_save_recorded
+            delta_str = f"未達（あと {int(remaining_to_save):,} 円）"
+            delta_color = "off" # 赤字にはせずグレー表示
     else:
         # 枠がない場合
-        if goals_save_actual > 0:
-            delta_str = "バッファ優先期間中" 
-            delta_color = "off"
+        if goals_save_recorded > 0:
+             delta_str = "バッファ優先期間中" 
+             delta_color = "off"
         else:
-            delta_str = "今はバッファ構築中 🛡️"
-            delta_color = "off"
+             delta_str = "-"
+             delta_color = "off"
 
     k4.metric(
         "🎯 Goals積立（実績）", 
-        f"{goals_save_actual:,} 円",
+        f"{int(goals_save_recorded):,} 円",
         delta=delta_str,
         delta_color=delta_color,
-        help="実際にGoalsに割り当てられた金額です。\n可能枠（全力ライン）と同じ金額なら、資産効率は最大化されています。"
+        help="【実績値】\nGoogleスプレッドシート（Goals_Save_Log）に記録された、今月の入金合計です。\n左の「可能枠」と同額になるよう入金してください。"
     )
     
     # 稼ぐ目標額の目安
@@ -349,10 +350,11 @@ def main():
         s2.metric("🎯 Goals積立達成率（当月）", "—")
         s2.caption("今月、積立対象の必須Goalsがありません。")
     else:
-        goals_month_ratio = min(float(goals_save_actual) / float(goals_ideal_total), 1.0)
+        # ※ここも 実績(recorded) / 理想(ideal) で計算
+        goals_month_ratio = min(float(goals_save_recorded) / float(goals_ideal_total), 1.0)
         s2.metric("🎯 Goals積立達成率（当月）", f"{int(goals_month_ratio*100)} %")
         s2.progress(goals_month_ratio)
-        s2.caption(f"現実：{int(goals_save_actual):,} 円 / 理想：{int(goals_ideal_total):,} 円")
+        s2.caption(f"現実：{int(goals_save_recorded):,} 円 / 理想：{int(goals_ideal_total):,} 円")
 
     st.caption(
         f"月収：{int(summary['monthly_income']):,} 円 "
@@ -593,11 +595,12 @@ def main():
     # ==================================================
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
 
-    plan_total = float(bank_save + nisa_save + goals_save_actual)
+    # シミュレーション用には、今回の「計画値」を使う
+    plan_total = float(bank_save + nisa_save + goals_save_plan_calc)
     if plan_total > 0:
         share_bank = bank_save / plan_total
         share_nisa = nisa_save / plan_total
-        share_goals = goals_save_actual / plan_total
+        share_goals = goals_save_plan_calc / plan_total
     else:
         share_bank = share_nisa = share_goals = 1.0 / 3.0
 
