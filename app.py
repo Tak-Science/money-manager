@@ -408,8 +408,95 @@ def main():
                         total=float(r["amount"]),
                         key=f"pie_{i}"
                     )
-                st.divider()
+                # ==================================================
+                # 🏦 銀行口座の「仮想内訳」見える化 (NEW)
+                # ==================================================
+                st.subheader("🏦 銀行口座の中身（仮想内訳）")
 
+                # 1. 銀行にあるべき「Goals預かり金」の合計（過去の積立実績の総和）
+                # ※ logic.goals_log_cumulative は全期間の合計を返します
+                saved_goals_total = lg.goals_log_cumulative(df_goals_log)
+
+                # 2. 実際の銀行残高
+                current_bank_real = bank_balance
+
+                # 3. 内訳計算
+                # 銀行残高のうち、Goals分が占める割合
+                # もし残高 < Goals積立額 なら、Goals資金すら手を付けてしまっている危険状態
+                breakdown_goals = min(current_bank_real, saved_goals_total)
+    
+                # 残りが生活防衛費
+                remainder = current_bank_real - breakdown_goals
+                breakdown_emergency = remainder # 余った分すべてが防衛費扱い
+    
+                # 生活防衛費の推奨額に対して、今の「残り」がどれくらいあるか
+                emergency_target = float(ef["fund_rec"])
+    
+                # グラフ表示用のデータ
+                df_breakdown = pd.DataFrame({
+                    "内訳": ["🔴 未来の支払用 (Goals)", "🟡 生活防衛費 (Safety)"],
+                    "金額": [breakdown_goals, breakdown_emergency],
+                    "説明": [
+                        f"過去に積み立てたGoals資金です。\n絶対に使ってはいけません。\n(実績累計: {int(saved_goals_total):,}円)",
+                        f"Goalsを引いた残りのお金です。\n何かあった時はここから出します。\n(目標: {int(emergency_target):,}円)"
+                    ]
+                })
+
+                # 横棒グラフで内訳を表示
+                fig_bd = go.Figure()
+    
+                # Goals部分
+                fig_bd.add_trace(go.Bar(
+                    y=["銀行口座の内訳"],
+                    x=[breakdown_goals],
+                    name="🔴 未来の支払用 (Goals)",
+                    orientation='h',
+                    marker=dict(color='#FF6B6B'), # 赤系
+                    text=f"{int(breakdown_goals):,} 円",
+                    textposition='auto',
+                    hovertemplate="<b>Goals預かり金</b><br>%{x:,.0f} 円<br>（絶対に触らない！）<extra></extra>"
+                ))
+
+                # 防衛費部分
+                fig_bd.add_trace(go.Bar(
+                    y=["銀行口座の内訳"],
+                    x=[breakdown_emergency],
+                    name="🟡 生活防衛費 (Safety)",
+                    orientation='h',
+                    marker=dict(color='#4ECDC4'), # 青緑系
+                    text=f"{int(breakdown_emergency):,} 円",
+                    textposition='auto',
+                    hovertemplate="<b>実質の生活防衛費</b><br>%{x:,.0f} 円<br>（Goalsを引いた残り）<extra></extra>"
+                ))
+
+                fig_bd.update_layout(
+                    barmode='stack',
+                    height=200,
+                    title="",
+                    xaxis_title="金額（円）",
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=20, r=20, t=30, b=20)
+                )
+
+                col_bd1, col_bd2 = st.columns([2, 1])
+    
+                with col_bd1:
+                    st.plotly_chart(fig_bd, use_container_width=True)
+        
+                with col_bd2:
+                    # アラート判定
+                    if current_bank_real < saved_goals_total:
+                        st.error("🚨 警告：Goals資金が不足しています！")
+                        st.caption(f"積み立てたはずのGoals資金（{int(saved_goals_total):,}円）に対し、実際の残高が足りていません。無意識に使ってしまっています。")
+                    else:
+                        safe_margin = breakdown_emergency - emergency_target
+                        if safe_margin >= 0:
+                            st.success("✅ 健全な状態です")
+                            st.caption("Goals資金を確保した上で、生活防衛費も目標額を満たしています。")
+                        else:
+                            st.info("⚠️ 生活防衛費を構築中です")
+                            st.caption(f"Goals資金は確保できています。防衛費の目標まであと {int(abs(safe_margin)):,} 円です。")
+                            st.divider()      
     # ==================================================
     # 資産推移（現状）
     # ==================================================
@@ -555,3 +642,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
