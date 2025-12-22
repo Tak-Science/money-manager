@@ -1053,44 +1053,67 @@ def main():
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
-    # === 🛠️ デバッグモード開始 ===
-    with st.expander("🔧 デバッグ：なぜGoalsが消えるのか確認する", expanded=True):
-        st.write("### 1. 生データの読み込み状況")
-        st.write(f"行数: {len(df_goals)}")
-        st.dataframe(df_goals) # ここで「達成期限」が NaT になっていないか、「金額」が NaN になっていないか見る
-
-        # 列名の確認
-        st.write("### 2. 認識されている列名")
-        st.write(list(df_goals.columns))
-
-        # フィルタリングのテスト
-        try:
-            test_df = df_goals.copy()
-            st.write("### 3. フィルタ通過テスト")
+# ==================================================
+    # 🔧 デバッグ：フィルタ落ちの原因チェッカー
+    # ==================================================
+    with st.expander("🔧 デバッグ：Goalsが表示されない理由を特定する", expanded=True):
+        if df_goals is None or df_goals.empty:
+            st.error("データ自体が空です")
+        else:
+            st.write("### 1. データの状態チェック")
+            # コピーを作成して検証
+            check = df_goals.copy()
             
-            # 支払済チェック
-            if "支払済" in test_df.columns:
-                paid_count = test_df["支払済"].sum()
-                st.write(f"- 支払済として除外される数: {paid_count} 件")
-                test_df = test_df[~test_df["支払済"]]
+            # 1. 支払済チェック
+            check["is_paid"] = check["支払済"]
             
-            # 日付パースチェック
-            if "達成期限" in test_df.columns:
-                nat_count = test_df["達成期限"].isna().sum()
-                if nat_count > 0:
-                    st.error(f"⚠️ {nat_count} 件のデータで「達成期限」の日付読み取りに失敗しています！（NaT表示）")
-                    st.write("対策：スプレッドシートの日付を '2026/01/01' 形式に書き直してください")
+            # 2. 金額チェック
+            # preprocess_dataですでに数値化されている前提
+            check["amount_ok"] = check["金額"].notna() & (check["金額"] > 0)
             
-            # 優先度チェック
-            if "優先度" in test_df.columns:
-                prio_count = test_df["優先度"].astype(str).str.contains("必須").sum()
-                st.write(f"- 「必須」が含まれるデータ数: {prio_count} 件")
-                if prio_count == 0:
-                    st.warning("⚠️ 「必須」データが見つかりません。優先度列に余計な空白がないか確認してください")
+            # 3. 日付チェック（NaTじゃないか）
+            check["date_ok"] = check["達成期限"].notna()
+            
+            # 4. 未来日付チェック
+            # 今日
+            today_ts = pd.to_datetime(datetime.today()).normalize()
+            check["is_future"] = check["達成期限"] >= today_ts
+            
+            # 5. 必須チェック
+            check["is_required"] = check["優先度"].astype(str).str.contains("必須", na=False)
 
-        except Exception as e:
-            st.error(f"デバッグ中にエラー発生: {e}")
-    # === 🛠️ デバッグモード終了 ===
+            # 結果を表示
+            st.dataframe(check[["目標名", "達成期限", "金額", "is_paid", "date_ok", "is_future", "is_required"]])
+            
+            st.write("### 判定結果")
+            if check["is_paid"].any():
+                st.warning(f"・支払済で除外: {check['is_paid'].sum()} 件")
+            
+            if (~check["date_ok"]).any():
+                st.error(f"・日付読み取り失敗(NaT)で除外: {(~check['date_ok']).sum()} 件 → スプレッドシートの日付形式を確認してください")
+                
+            if (~check["amount_ok"]).any():
+                st.error(f"・金額なし/0円で除外: {(~check['amount_ok']).sum()} 件")
+
+            # ここが怪しい！
+            past_items = check[check["date_ok"] & (~check["is_future"])]
+            if not past_items.empty:
+                st.warning(f"・【重要】日付が過去（今日以前）のため除外: {len(past_items)} 件")
+                st.write(past_items["目標名"].tolist())
+
+            valid_items = check[
+                (~check["is_paid"]) & 
+                check["date_ok"] & 
+                check["amount_ok"] & 
+                check["is_future"] & 
+                check["is_required"]
+            ]
+            
+            if valid_items.empty:
+                st.error("😭 全てのフィルタを通ったデータが 0件 です。")
+            else:
+                st.success(f"✅ 表示可能なデータが {len(valid_items)} 件 あります！")
+    #=========デバック終了
     today = datetime.today()
 
     goals_horizon_years = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
@@ -1459,6 +1482,7 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
 
