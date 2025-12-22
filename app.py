@@ -82,7 +82,7 @@ def load_data():
     df_fix     = get_df("Fix_Cost",        "A:G")
     df_forms   = get_df("Forms_Log",       "A:G")
     df_balance = get_df("Balance_Log",     "A:C")
-    df_goals   = get_df("Goals",           "A:F")
+    df_goals   = get_df("Goals",           "A:Z")
     df_goals_log = get_df("Goals_Save_Log","A:D")  # 月1回の実績入力
 
     return df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
@@ -1382,3 +1382,4 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
