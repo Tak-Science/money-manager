@@ -535,42 +535,67 @@ def classify_distance_bucket(today, deadline):
     return "long"
 
 # ==================================================
-# Goals：イベント化（支出/目標）
+# Goals：イベント化（修正版：どこで消えたか実況する）
 # ==================================================
 def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
-    if df_goals is None or df_goals.empty:
-        return {}, {}, pd.DataFrame()
+    # --- 🔍 関数内デバッグ表示 ---
+    with st.expander("🔍 Goalsフィルタリングの追跡", expanded=True):
+        st.write(f"1. 処理開始時の件数: {len(df_goals) if df_goals is not None else 0} 件")
 
-    required_cols = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
-    for col in required_cols:
-        if col not in df_goals.columns:
-            # 列不足の場合はデバッグ用に戻り値を返す
+        if df_goals is None or df_goals.empty:
             return {}, {}, pd.DataFrame()
 
-    df = df_goals.copy()
-    
-    # ★追加：支払済（TRUE）のGoalsを除外する
-    if "支払済" in df.columns:
-        df = df[~df["支払済"]] # Falseのものだけ残す
+        required_cols = ["目標名", "金額", "通貨", "達成期限", "優先度", "タイプ"]
+        for col in required_cols:
+            if col not in df_goals.columns:
+                st.error(f"❌ 必要な列「{col}」が見つかりません。")
+                return {}, {}, pd.DataFrame()
 
-    df["達成期限"] = pd.to_datetime(df["達成期限"], errors="coerce")
-    df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
-    
-    # 金額や期限が無効なものを除外
-    df = df.dropna(subset=["達成期限", "金額"])
-    
-    if df.empty:
-        return {}, {}, pd.DataFrame()
+        df = df_goals.copy()
+        
+        # 支払済除外
+        if "支払済" in df.columns:
+            df = df[~df["支払済"]] 
+        st.write(f"2. 支払済を除外後: {len(df)} 件")
 
-    horizon_dt = pd.to_datetime(today).normalize() + pd.DateOffset(years=int(max(horizon_years, 1)))
-    df = df[(df["達成期限"] >= pd.to_datetime(today).normalize()) & (df["達成期限"] <= horizon_dt)]
+        df["達成期限"] = pd.to_datetime(df["達成期限"], errors="coerce")
+        df["金額"] = pd.to_numeric(df["金額"], errors="coerce")
+        
+        # 有効データ
+        df = df.dropna(subset=["達成期限", "金額"])
+        st.write(f"3. 日付・金額が有効なデータ: {len(df)} 件")
+        
+        # 期間フィルタ
+        st.write(f"設定された期間: {horizon_years} 年間")
+        today_ts = pd.to_datetime(today).normalize()
+        horizon_dt = today_ts + pd.DateOffset(years=int(max(horizon_years, 1)))
+        
+        st.write(f"期間範囲: {today_ts.date()} 〜 {horizon_dt.date()}")
 
-    if only_required and "優先度" in df.columns:
-        df = df[df["優先度"].astype(str).str.contains("必須", na=False)]
+        # 未来チェック
+        df_future = df[df["達成期限"] >= today_ts]
+        st.write(f"4. 今日より未来のデータ: {len(df_future)} 件")
+        if len(df) > 0 and len(df_future) == 0:
+            st.warning("⚠️ 全ての日付が「過去」と判定されました。")
 
-    if df.empty:
-        return {}, {}, pd.DataFrame()
+        # 上限チェック
+        df_range = df_future[df_future["達成期限"] <= horizon_dt]
+        st.write(f"5. 上限（{horizon_years}年後）以内のデータ: {len(df_range)} 件")
+        if len(df_future) > 0 and len(df_range) == 0:
+            st.warning(f"⚠️ 全てのデータが {horizon_years}年後 より先です。Parametersシートの「Goals積立対象年数」を増やしてください。")
 
+        df = df_range
+
+        # 優先度フィルタ
+        if only_required and "優先度" in df.columns:
+            df = df[df["優先度"].astype(str).str.contains("必須", na=False)]
+            st.write(f"6. 「必須」フィルタ後: {len(df)} 件")
+
+        if df.empty:
+            st.error("😭 結果、0件になりました。上記のどの段階で0になったか確認してください。")
+            return {}, {}, pd.DataFrame()
+
+    # --- 以下、元の処理 ---
     df["month"] = df["達成期限"].dt.to_period("M").astype(str)
     df["bucket"] = df["達成期限"].apply(lambda x: classify_distance_bucket(today, x))
 
@@ -606,7 +631,6 @@ def prepare_goals_events(df_goals, today, only_required=True, horizon_years=5):
 
     df_norm = pd.DataFrame(rows_norm)
     return outflows_by_month, targets_by_month, df_norm
-
 # ==================================================
 # Goals：実績（Goals_Save_Log）集計
 # ==================================================
@@ -1482,8 +1506,3 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
-
-
-
-
-
