@@ -288,80 +288,91 @@ def main():
     st.caption(f"※ 現在資産：{int(summary['current_total_asset']):,} 円（銀行 {int(bank_balance):,} / NISA {int(nisa_balance):,}）")
 
     # ==================================================
-    # 🏦 銀行口座の「仮想内訳」見える化 (NEW)
+    # 🏦 銀行口座の「仮想内訳」見える化 (Improved)
     # ==================================================
     st.subheader("🏦 銀行口座の中身（仮想内訳）")
 
-    # 1. 銀行にあるべき「Goals預かり金」の合計（過去の積立実績の総和）
-    saved_goals_total = lg.goals_log_cumulative(df_goals_log)
+    # 1. 計算の基礎データ
+    saved_goals_total = lg.goals_log_cumulative(df_goals_log) # 過去に積み立てたGoals総額
+    current_bank_real = bank_balance                          # 実際の銀行残高
+    emergency_target = float(ef["fund_rec"])                  # 生活防衛費の目標額
 
-    # 2. 実際の銀行残高
-    current_bank_real = bank_balance
+    # 2. 3層構造の計算
+    # (1) Goals部分（最優先）
+    val_goals = min(current_bank_real, saved_goals_total)
+    remaining_1 = current_bank_real - val_goals
 
-    # 3. 内訳計算
-    breakdown_goals = min(current_bank_real, saved_goals_total)
-    remainder = current_bank_real - breakdown_goals
-    breakdown_emergency = remainder 
-    
-    emergency_target = float(ef["fund_rec"])
-    
-    # グラフ表示
+    # (2) 生活防衛費部分（Goalsの次）
+    # 残金のうち、目標額までは「防衛費」として埋める
+    val_emergency = min(remaining_1, emergency_target)
+    remaining_2 = remaining_1 - val_emergency
+
+    # (3) フリー余剰金（あふれた分）
+    # これが「今すぐ引き出しても将来や防衛費に影響しないお金」
+    val_surplus = remaining_2
+
+    # 3. グラフ表示
     fig_bd = go.Figure()
-    
-    # Goals部分
+
+    # レイヤー1: Goals
     fig_bd.add_trace(go.Bar(
-        y=["銀行口座の内訳"],
-        x=[breakdown_goals],
-        name="🔴 未来の支払用 (Goals)",
-        orientation='h',
-        marker=dict(color='#FF6B6B'), # 赤系
-        text=f"{int(breakdown_goals):,} 円",
-        textposition='auto',
-        hovertemplate="<b>Goals預かり金</b><br>%{x:,.0f} 円<br>（絶対に触らない！）<extra></extra>"
+        y=["口座内訳"], x=[val_goals], name="🔴 Goals預かり金", orientation='h',
+        marker=dict(color='#FF6B6B'), # 赤
+        hovertemplate="<b>Goals預かり金</b><br>%{x:,.0f} 円<br>（将来の支払い用・使用厳禁）<extra></extra>"
     ))
 
-    # 防衛費部分
+    # レイヤー2: 生活防衛費
     fig_bd.add_trace(go.Bar(
-        y=["銀行口座の内訳"],
-        x=[breakdown_emergency],
-        name="🟡 生活防衛費 (Safety)",
-        orientation='h',
-        marker=dict(color='#4ECDC4'), # 青緑系
-        text=f"{int(breakdown_emergency):,} 円",
-        textposition='auto',
-        hovertemplate="<b>実質の生活防衛費</b><br>%{x:,.0f} 円<br>（Goalsを引いた残り）<extra></extra>"
+        y=["口座内訳"], x=[val_emergency], name="🟡 生活防衛費", orientation='h',
+        marker=dict(color='#FFD93D'), # 黄色
+        hovertemplate="<b>生活防衛費</b><br>%{x:,.0f} 円<br>（緊急時のバッファ）<extra></extra>"
     ))
+
+    # レイヤー3: フリー余剰
+    if val_surplus > 0:
+        fig_bd.add_trace(go.Bar(
+            y=["口座内訳"], x=[val_surplus], name="🟢 フリー余剰", orientation='h',
+            marker=dict(color='#6BCB77'), # 緑
+            hovertemplate="<b>フリー余剰資金</b><br>%{x:,.0f} 円<br>（自由に使ってOK）<extra></extra>"
+        ))
 
     fig_bd.update_layout(
-        barmode='stack',
-        height=200,
-        title="",
-        xaxis_title="金額（円）",
+        barmode='stack', height=180, title="", xaxis_title="金額（円）",
         legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-        margin=dict(l=20, r=20, t=30, b=20)
+        margin=dict(l=20, r=20, t=20, b=20)
     )
 
     col_bd1, col_bd2 = st.columns([2, 1])
-    
+
     with col_bd1:
-        # ★ここが修正ポイント：key="bank_breakdown" を追加してID重複を回避
-        st.plotly_chart(fig_bd, use_container_width=True, key="bank_breakdown")
-        
+        st.plotly_chart(fig_bd, use_container_width=True, key="bank_breakdown_v2")
+
     with col_bd2:
+        # 判定ロジックの改善
+        # まずは「ストック（残高）」の健全性を判定
+        status_stock = "safe"
         if current_bank_real < saved_goals_total:
-            st.error("🚨 警告：Goals資金が不足しています！")
-            st.caption(f"積み立てたはずのGoals資金（{int(saved_goals_total):,}円）に対し、実際の残高が足りていません。無意識に使ってしまっています。")
+            status_stock = "danger"
+            st.error("🚨 警告：Goals浸食")
+            st.caption(f"Goals資金を {int(saved_goals_total - current_bank_real):,} 円 使い込んでいます。至急補填が必要です。")
+        elif val_surplus > 0:
+            status_stock = "rich"
+            st.success("✨ 余裕あり")
+            st.caption(f"防衛費まで満タンです。\n{int(val_surplus):,} 円は自由に使えます。")
         else:
-            safe_margin = breakdown_emergency - emergency_target
-            if safe_margin >= 0:
-                st.success("✅ 健全な状態です")
-                st.caption("Goals資金を確保した上で、生活防衛費も目標額を満たしています。")
-            else:
-                st.info("⚠️ 生活防衛費を構築中です")
-                st.caption(f"Goals資金は確保できています。防衛費の目標まであと {int(abs(safe_margin)):,} 円です。")
+            status_stock = "building"
+            # 防衛費の進捗
+            pct = int((val_emergency / emergency_target) * 100) if emergency_target > 0 else 0
+            st.info(f"🛡️ 防衛費構築中 ({pct}%)")
+            st.caption(f"Goalsは確保済。\n防衛費満タンまであと {int(emergency_target - val_emergency):,} 円")
+
+        # 次に「フロー（今月の動き）」で釘を刺す
+        # 赤字(deficit)がある場合、資産が健全でも警告を出す
+        if deficit is not None:
+            st.warning(f"⚠️ 今月は取り崩し中")
+            st.caption(f"残高はありますが、今月は資産が {int(deficit['total_deficit']):,} 円 減っています。")
 
     st.divider()
-
     # ==================================================
     # 赤字分析
     # ==================================================
@@ -625,3 +636,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
