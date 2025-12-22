@@ -189,7 +189,7 @@ def main():
     # 生活費P75の取得
     monthly_p75 = float(ef["monthly_est_p75"])
 
-    # 現実的な配分計算（Logic V4: Auto-Buffer）
+    # 現実的な配分計算（Logic V4: Auto-Buffer + Runway）
     available_cash = float(summary["available_cash"])
     
     allocation = lg.allocate_monthly_budget(
@@ -214,21 +214,12 @@ def main():
     st.subheader("📌 KPI（今月）")
     k1, k2, k3, k4 = st.columns(4)
     
-    # 1. 銀行積立
-    if emergency_not_met:
-        k1.metric(
-            "🏦 銀行積立", 
-            f"{bank_save:,} 円",
-            help=f"防衛費が未達のため、最低 {config.MIN_BANK_AMOUNT:,} 円を確保しようとしています。"
-        )
-    else:
-        k1.metric(
-            "🏦 銀行積立", 
-            "✅ 完了",
-            help="生活防衛費が目標に達しているため、これ以上の積立は不要です。"
-        )
+    k1.metric(
+        "🏦 銀行積立", 
+        f"{bank_save:,} 円",
+        help=f"最低確保額（{config.MIN_BANK_AMOUNT:,}円）を含みます。"
+    )
     
-    # 2. NISA積立
     nisa_help = f"最低確保額（{config.MIN_NISA_AMOUNT:,}円）。"
     if available_cash <= 0 and nisa_save > 0:
         nisa_help += "\n\n★今月は赤字ですが、銀行の余剰資金を活用して積み立てます（ナイス判断！）。"
@@ -239,37 +230,80 @@ def main():
         help=nisa_help
     )
     
-    # 3. Goals積立（見通し・可能枠）★ここを変更
-    # 今月の収入から、固定費・変動費・聖域（NISA/Bank）を引いた残り
-    # これが「今月Goalsに回せる限界（全力ライン）」です
-    goals_capacity = max(available_cash - nisa_save - bank_save, 0.0)
+    # 3. Goals積立可能枠（ランウェイ方式に修正）
+    # ----------------------------------------------------
+    # A. バッファ目標額（生活費P75 × 1.5ヶ月）
+    buffer_target_val = monthly_p75 * config.BANK_GREEN_BUFFER_MONTHS
     
+    # B. ストックからの供出可能額（真の余剰）
+    excess_wealth_for_goals = max(stock_surplus - buffer_target_val, 0.0)
+    
+    # C. ストックからの供出上限（ランウェイ方式）
+    # 割り算をして「今月使っていい上限」を決める
+    months_div = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 12
+    capped_stock_surplus = excess_wealth_for_goals / months_div if months_div > 0 else 0
+    
+    # D. フローからの供出可能額（今月の収入余剰）
+    current_flow_surplus = max(available_cash - nisa_save - bank_save, 0.0)
+    
+    # E. 実際の枠 = フロー余剰 + キャップ付きストック余剰
+    real_goals_capacity = current_flow_surplus + capped_stock_surplus
+    
+    # Help情報の計算
+    total_power = excess_wealth_for_goals + current_flow_surplus
+    gap_to_buffer = max(buffer_target_val - stock_surplus, 0.0)
+
+    if gap_to_buffer > 0:
+        help_text = f"""
+        【積立枠 0円 の理由】
+        安全バッファの構築を最優先しています。（あと {int(gap_to_buffer):,} 円）
+        """
+    else:
+        help_text = f"""
+        【内訳（ランウェイ方式）】
+        バッファ目標（{int(buffer_target_val):,}円）は確保済みです。
+        
+        ・収入から：{int(current_flow_surplus):,} 円
+        ・銀行余剰から：{int(capped_stock_surplus):,} 円
+        
+        ※ 銀行余剰 {int(excess_wealth_for_goals):,} 円 を、
+        向こう {months_div} ヶ月で配分するペース（{int(capped_stock_surplus):,}円/月）で切り出しています。
+        """
+
     k3.metric(
         "💪 Goals積立可能枠", 
-        f"{int(goals_capacity):,} 円",
-        help=f"今月の収入から、生活費と聖域（NISA/銀行）を引いた残りです。\nこれが「今月無理なくGoalsに回せる最大額」です。\n\n（本来の理想額: {goals_ideal_total:,} 円）"
+        f"{int(real_goals_capacity):,} 円",
+        help=help_text
     )
     
-    # 4. Goals積立（実績）★ここを変更
-    # 可能枠に対して、どれだけ実行できたか？
-    if goals_capacity > 0:
-        # 枠があるのに実績が少ない＝余力がある、枠＝実績なら100%
-        delta_val = goals_save_actual - goals_capacity
-        delta_str = "Full Power! 🔥" if delta_val >= 0 else f"{int(delta_val):,} 円 (未達)"
-        delta_color = "normal" if delta_val >= 0 else "inverse"
+    # 4. Goals積立（実績）
+    # ※計算済みの real_goals_capacity を判定に使う
+    if real_goals_capacity > 0:
+        # 実績が枠の99%以上ならFull Power
+        if goals_save_actual >= real_goals_capacity * 0.99:
+            delta_str = "Full Power! 🔥"
+            delta_color = "normal"
+        else:
+            remain = real_goals_capacity - goals_save_actual
+            delta_str = f"あと {int(remain):,} 円 OK"
+            delta_color = "off"
     else:
-        # そもそも枠がない（赤字）
-        delta_str = "今月は我慢 🐻"
-        delta_color = "off"
+        # 枠がない場合
+        if goals_save_actual > 0:
+            delta_str = "バッファ優先期間中" 
+            delta_color = "off"
+        else:
+            delta_str = "今はバッファ構築中 🛡️"
+            delta_color = "off"
 
     k4.metric(
         "🎯 Goals積立（実績）", 
         f"{goals_save_actual:,} 円",
         delta=delta_str,
         delta_color=delta_color,
-        help="実際にGoalsに割り当てられた金額です。\n可能枠と同じ金額なら、今月の全力を出し切れています。"
+        help="実際にGoalsに割り当てられた金額です。\n可能枠（全力ライン）と同じ金額なら、資産効率は最大化されています。"
     )
-
+    
     # 稼ぐ目標額の目安
     target_income_ideal = float(summary["fix_cost"]) + float(summary["variable_cost"]) + float(config.MIN_NISA_AMOUNT + config.MIN_BANK_AMOUNT) + float(goals_ideal_total)
     shortage_for_ideal = max(target_income_ideal - float(summary["monthly_income"]), 0)
@@ -660,4 +694,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
