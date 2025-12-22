@@ -1013,15 +1013,7 @@ def main():
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
-    with st.expander("DEBUG: Goalsシートの読み込み確認"):
-        st.write("Goals columns:", list(df_goals.columns) if df_goals is not None else None)
-        if df_goals is not None and not df_goals.empty:
-            st.dataframe(df_goals.head(20), use_container_width=True)
     today = datetime.today()
-    with st.expander("DEBUG: Goalsシートの読み込み確認"):
-        st.write("Goals columns:", list(df_goals.columns) if df_goals is not None else None)
-        if df_goals is not None and not df_goals.empty:
-            st.dataframe(df_goals.head(20), use_container_width=True)
 
     goals_horizon_years = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
     swr_assumption = to_float_safe(get_latest_parameter(df_params, "SWR", today), default=0.035)
@@ -1390,5 +1382,6 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
 
