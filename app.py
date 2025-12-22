@@ -1035,6 +1035,10 @@ def main():
     st.title("💰 今月サマリー")
     # main()関数内の st.title の下あたりに追加してください
     
+    df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
+    df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
+        df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
+    )
     # === 🛠️ デバッグモード開始 ===
     with st.expander("🔧 デバッグ：なぜGoalsが消えるのか確認する", expanded=True):
         st.write("### 1. 生データの読み込み状況")
@@ -1073,11 +1077,6 @@ def main():
         except Exception as e:
             st.error(f"デバッグ中にエラー発生: {e}")
     # === 🛠️ デバッグモード終了 ===
-
-    df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = load_data()
-    df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = preprocess_data(
-        df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
-    )
     today = datetime.today()
 
     goals_horizon_years = to_int_safe(get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
@@ -1446,4 +1445,5 @@ def main():
 # ==================================================
 if __name__ == "__main__":
     main()
+
 
