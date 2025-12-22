@@ -32,7 +32,7 @@ MIN_BANK_AMOUNT = 5000
 # ==================================================
 # 生活防衛費（黄色）とは別に、普通口座に持っておく「運転資金」
 # 「普段より出費が多い月（P75）」の何ヶ月分を持つか？
-BANK_GREEN_BUFFER_MONTHS = 1.5
+BANK_GREEN_BUFFER_MONTHS = 3.5
 
 # KPI / カテゴリ定義
 EXPENSE_CATEGORIES = [
