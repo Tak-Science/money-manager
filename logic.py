@@ -513,11 +513,12 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
-# ★修正：monthly_spend_p75 引数を追加
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
     """
     収入の範囲内で配分する。
-    緑色の余剰が「生活費のNヶ月分（自動計算）」に達するまでは、銀行積立を継続する。
+    【重要変更】
+    緑色の余剰が「目標額（生活費1.5ヶ月分）」未満の場合、
+    資産（ストック）を取り崩してのNISA積立は行わない（バッファ防衛優先）。
     """
     remaining = float(available_cash)
     
@@ -526,38 +527,62 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
     buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
 
     # 1. 聖域（ミニマム積立）の確保
+    # ----------------------------------------------------
+    # A. 銀行積立
     req_bank = 0.0
     if emergency_not_met:
         req_bank = config.MIN_BANK_AMOUNT
     elif stock_surplus < buffer_target:
+        # バッファが目標未満なら、優先的に銀行へ入れる
         req_bank = config.MIN_BANK_AMOUNT
     else:
         req_bank = 0.0
     
+    # B. NISA積立
     req_nisa = config.MIN_NISA_AMOUNT
     
+    # 配分計算
     bank_alloc = 0.0
     nisa_alloc = 0.0
     
+    # (ケース1) 収入（フロー）で賄える場合
     if remaining >= (req_bank + req_nisa):
         bank_alloc = req_bank
         nisa_alloc = req_nisa
         remaining -= (bank_alloc + nisa_alloc)
         
-    elif stock_surplus > req_nisa:
-        # 余剰があるならNISAだけは出す
+    # (ケース2) 収入不足だが、資産余剰（ストック）がある場合
+    # ★修正：余剰があるだけでなく、「バッファ目標を超えている」場合のみ取り崩しOKとする
+    # つまり (今の余剰 - NISA額) が、まだ目標以上であること
+    elif (stock_surplus - req_nisa) >= buffer_target:
+        # 銀行積立は諦める（というかバッファ十分なので不要）
         bank_alloc = 0.0 
+        
+        # 余剰が潤沢にあるので、そこからNISAを出す（リアロケーション）
         nisa_alloc = req_nisa
+        
+        # フロー残金調整
         remaining = max(remaining - bank_alloc - nisa_alloc, 0.0)
         
+    # (ケース3) 収入もなく、バッファも目標割れしている（完全な守りの時期）
     else:
-        total_req = req_bank + req_nisa
-        ratio = remaining / total_req if total_req > 0 else 0
-        bank_alloc = req_bank * ratio
-        nisa_alloc = req_nisa * ratio
-        remaining = 0.0
+        # ストックには手を付けない！NISAも我慢する。
+        # あるだけの収入（フロー）を、銀行優先で割り振る
+        
+        if remaining >= req_bank:
+            bank_alloc = req_bank
+            remaining -= bank_alloc
+            # 残りでNISA
+            nisa_alloc = min(remaining, req_nisa)
+            remaining -= nisa_alloc
+        else:
+            # 銀行積立すら満額無理なら、あるだけ銀行へ
+            bank_alloc = remaining
+            remaining = 0.0
 
     # 2. Goalsへの配分
+    # ... (以下、元のコードと同じ)
+    
     total_goals_alloc = 0.0
     
     if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
@@ -583,10 +608,8 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
     goals_shortfall = float(goals_plan_ideal) - total_goals_alloc
 
     if remaining > 0:
-        extra_nisa = remaining * 0.5
-        extra_bank = remaining * 0.5
-        nisa_alloc += extra_nisa
-        bank_alloc += extra_bank
+        # 完全に余ったら自由費へ
+        pass
 
     return {
         "nisa_save": int(nisa_alloc),
