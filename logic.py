@@ -2,6 +2,7 @@ import pandas as pd
 import re
 from datetime import datetime
 from collections import defaultdict
+import numpy as np
 
 # 設定ファイルを読み込みます
 import config
@@ -485,7 +486,7 @@ def compute_goals_monthly_plan(df_goals_progress, today, emergency_not_met):
     return total, d
 
 # ==================================================
-# 今月サマリー & 配分ロジック (NEW)
+# 今月サマリー & 配分ロジック
 # ==================================================
 def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
     base_income = to_float_safe(get_latest_parameter(df_params, "月収", today), default=0.0)
@@ -513,36 +514,25 @@ def calculate_monthly_summary(df_params, df_fix, df_forms, df_balance, today):
         "current_nisa": float(current_nisa),
     }
 
-# ★修正：すべての引数と定義を正しく含めた完全版
 def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_met, stock_surplus, monthly_spend_p75):
     """
-    収入の範囲内で配分する。
-    ただし、「バッファ目標」を超えた余剰資金（真の余剰）がある場合は、
-    ランウェイ方式（期間按分）で少しずつGoals積立に回す。
+    今月の予算配分を計算（KPI表示用）
     """
     remaining_flow = float(available_cash)
     
-    # 1. 安全ライン（バッファ目標）の計算
-    # ----------------------------------------------------
-    # これを一番最初にやらないとエラーになります
     base_spend = monthly_spend_p75 if monthly_spend_p75 > 0 else 200000
     buffer_target = base_spend * config.BANK_GREEN_BUFFER_MONTHS
     
-    # 2. ストック余力の計算
-    # ----------------------------------------------------
-    # 真の余剰（Excess Wealth）
+    # 真の余剰 (Stock Surplus - Buffer)
     excess_wealth = max(stock_surplus - buffer_target, 0.0)
     
-    # ランウェイ計算（今月切り出していい上限額）
-    # configに設定がなければデフォルト12ヶ月
+    # ランウェイ計算 (余剰 ÷ 月数)
     months_div = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 12
     if months_div <= 0: months_div = 1
     stock_transfer_capacity = excess_wealth / months_div
 
-    # 3. 聖域（ミニマム積立）の確保
-    # ----------------------------------------------------
+    # 聖域（ミニマム積立）
     req_bank = 0.0
-    # バッファが足りないなら、フローから銀行積立を試みる
     if emergency_not_met or (stock_surplus < buffer_target):
         req_bank = config.MIN_BANK_AMOUNT
     
@@ -551,33 +541,27 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
     bank_alloc = 0.0
     nisa_alloc = 0.0
     
-    # A. まず銀行積立（これはフローから出すのが基本）
+    # 1. 銀行積立
     if remaining_flow >= req_bank:
         bank_alloc = req_bank
         remaining_flow -= bank_alloc
     else:
-        # フローで足りないなら、あるだけ入れる
         bank_alloc = remaining_flow
         remaining_flow = 0.0
         
-    # B. 次にNISA（フローから、足りなければ真の余剰から）
+    # 2. NISA (最低額)
     needed_for_nisa = req_nisa
-    
-    # フローから出す
     from_flow = min(remaining_flow, needed_for_nisa)
     nisa_alloc += from_flow
     remaining_flow -= from_flow
     needed_for_nisa -= from_flow
     
-    # 足りない分を「真の余剰」から補填（バッファが守られている前提）
-    # ※余剰があってもバッファ未満ならここは0になるので安全
     if needed_for_nisa > 0 and excess_wealth > 0:
         from_stock = min(excess_wealth, needed_for_nisa)
         nisa_alloc += from_stock
-        excess_wealth -= from_stock # 余剰を使ったので減らす
+        excess_wealth -= from_stock
 
-    # 4. Goalsへの配分（フロー優先、足りなければストックから「少しずつ」）
-    # ----------------------------------------------------
+    # 3. Goals
     total_goals_alloc = 0.0
     
     if df_goals_plan_detail is not None and not df_goals_plan_detail.empty:
@@ -592,20 +576,15 @@ def allocate_monthly_budget(available_cash, df_goals_plan_detail, emergency_not_
             if ideal <= 0:
                 continue
             
-            # A. まずフロー（収入）の残りで埋める
             pay_flow = min(remaining_flow, ideal)
             remaining_flow -= pay_flow
             ideal -= pay_flow
             
-            # B. まだ足りなくて、真の余剰があるなら、そこから埋める
-            # ★修正点：上限は「期間按分した金額(stock_transfer_capacity)」
             pay_stock = 0.0
             if ideal > 0 and excess_wealth > 0 and stock_transfer_capacity > 0:
-                # 「必要な額」「余剰全額」「今月の転送枠」の3つの中で最小のものを採用
                 pay_stock = min(ideal, excess_wealth, stock_transfer_capacity)
-                
-                excess_wealth -= pay_stock           # 余剰残高を減らす
-                stock_transfer_capacity -= pay_stock # 今月の転送枠を減らす
+                excess_wealth -= pay_stock
+                stock_transfer_capacity -= pay_stock
             
             total_goals_alloc += (pay_flow + pay_stock)
             
@@ -641,7 +620,7 @@ def compute_current_swr(monthly_spend, investable_asset):
     return float(annual / a)
 
 # ==================================================
-# シミュレーション関連
+# シミュレーション関連（ロジック厳格化版）
 # ==================================================
 def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     pv = float(pv)
@@ -656,47 +635,7 @@ def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     pmt = (fv_target - pv * a) / denom
     return max(float(pmt), 0.0)
 
-def apply_outflow_three_pockets(goals_fund, emergency_cash, nisa, outflow):
-    goals_fund = float(goals_fund)
-    emergency_cash = float(emergency_cash)
-    nisa = float(nisa)
-    outflow = float(outflow)
-
-    used_goals = min(goals_fund, outflow)
-    goals_fund -= used_goals
-    remain = outflow - used_goals
-
-    used_em = min(emergency_cash, remain)
-    emergency_cash -= used_em
-    remain2 = remain - used_em
-
-    used_nisa = min(nisa, remain2)
-    nisa -= used_nisa
-
-    unpaid = remain2 - used_nisa
-    return goals_fund, emergency_cash, nisa, used_goals, used_em, used_nisa, unpaid
-
-def estimate_realistic_monthly_contribution(df_balance, months=6):
-    if df_balance is None or df_balance.empty:
-        return 0.0
-
-    df = df_balance.copy()
-    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
-    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
-    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce")
-    df = df.dropna(subset=["日付"]).sort_values("日付")
-    if df.empty or len(df) < 2:
-        return 0.0
-
-    df["total"] = df["銀行残高"].fillna(0) + df["NISA評価額"].fillna(0)
-    df["month"] = df["日付"].dt.to_period("M").astype(str)
-    monthly_last = df.groupby("month", as_index=False)["total"].last()
-    monthly_last["diff"] = monthly_last["total"].diff()
-    diffs = monthly_last["diff"].dropna().tail(months)
-
-    if diffs.empty:
-        return 0.0
-    return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+# logic.py の simulate_fi_paths 関数を修正
 
 def simulate_fi_paths(
     *,
@@ -704,9 +643,9 @@ def simulate_fi_paths(
     current_age,
     end_age,
     annual_return,
-    current_emergency_cash,
-    current_goals_fund,
-    current_nisa,
+    current_emergency_cash, 
+    current_goals_fund,     
+    current_nisa,           
     monthly_emergency_save_real,
     monthly_goals_save_real,
     monthly_nisa_save_real,
@@ -714,33 +653,43 @@ def simulate_fi_paths(
     outflows_by_month,
     ef_rec,
 ):
-    r = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
-
+    # 年利換算
+    r_nisa_monthly = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
+    
     months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
     dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
 
+    # 初期状態
+    sim_goals = float(current_goals_fund) 
+    sim_bank_pure = float(current_emergency_cash)
+    sim_nisa = float(current_nisa)
+
+    # ランウェイ計算用設定
+    # バッファ目標額
+    base_monthly = ef_rec / 6 if ef_rec > 0 else 200000 
+    buffer_target_val = base_monthly * config.BANK_GREEN_BUFFER_MONTHS
+    
+    # 期間（分母）
+    runway_months_setting = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 18
+    if runway_months_setting <= 0: runway_months_setting = 1
+
+    # 理想計算用の変数
     pv_investable = float(current_emergency_cash) + float(current_nisa)
     ideal_pmt_investable = solve_required_monthly_pmt(
         pv=pv_investable,
         fv_target=float(fi_target_asset),
-        r_month=r,
+        r_month=r_nisa_monthly,
         n_months=months_left
     )
-
-    ideal_nisa_ratio = 0.8
-
-    em = float(current_emergency_cash)
-    gf = float(current_goals_fund)
-    ni = float(current_nisa)
-
-    em_i = float(current_emergency_cash)
-    gf_i = float(current_goals_fund)
-    ni_i = float(current_nisa)
-
+    
     rows = []
+
     for i, dt in enumerate(dates):
         month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
 
+        # ----------------------------------------------------
+        # 1. 支出イベント
+        # ----------------------------------------------------
         items = outflows_by_month.get(month_key, [])
         outflow = float(sum(x["amount"] for x in items)) if items else 0.0
         outflow_name = ""
@@ -748,62 +697,65 @@ def simulate_fi_paths(
             names = [x["name"] for x in items]
             outflow_name = " / ".join(names[:3]) + (" …" if len(names) > 3 else "")
 
-        unpaid_real = 0.0
-        if outflow > 0:
-            gf, em, ni, _, _, _, unpaid_real = apply_outflow_three_pockets(gf, em, ni, outflow)
+        pay_from_goals = min(sim_goals, outflow)
+        sim_goals -= pay_from_goals
+        remain_outflow = outflow - pay_from_goals
+        
+        pay_from_bank = min(sim_bank_pure, remain_outflow)
+        sim_bank_pure -= pay_from_bank
+        
+        unpaid = remain_outflow - pay_from_bank
 
-        unpaid_ideal = 0.0
-        if outflow > 0:
-            gf_i, em_i, ni_i, _, _, _, unpaid_ideal = apply_outflow_three_pockets(gf_i, em_i, ni_i, outflow)
+        # ----------------------------------------------------
+        # 2. 収入と積立（Monthly Cashflow）
+        # ----------------------------------------------------
+        flow_to_goals = float(monthly_goals_save_real) 
+        flow_to_nisa = float(monthly_nisa_save_real)
+        flow_to_bank = float(monthly_emergency_save_real)
 
-        total_real = gf + em + ni
-        investable_real = em + ni
+        # ★修正：動的ランウェイ計算 (Dynamic Runway)
+        # 「その月の時点での」真の余剰を計算
+        current_surplus = max(sim_bank_pure - buffer_target_val, 0.0)
+        
+        # 余剰を期間(18)で割った額を、今月のNISAブースト枠とする
+        stock_power = current_surplus / runway_months_setting
+        
+        # 銀行から切り出し
+        if stock_power > 0:
+            sim_bank_pure -= stock_power
 
-        total_ideal = gf_i + em_i + ni_i
-        investable_ideal = em_i + ni_i
+        # ----------------------------------------------------
+        # 3. 配分と運用
+        # ----------------------------------------------------
+        sim_bank_pure += flow_to_bank
+        sim_goals += flow_to_goals
+        
+        # NISA = フロー積立 + ストックからのブースト
+        sim_nisa += (flow_to_nisa + stock_power)
 
-        fi_ok_real = (investable_real >= float(fi_target_asset)) and (em >= float(ef_rec))
-        fi_ok_ideal = (investable_ideal >= float(fi_target_asset)) and (em_i >= float(ef_rec))
+        # 運用益
+        sim_nisa = sim_nisa * (1 + r_nisa_monthly)
+
+        # ----------------------------------------------------
+        # 4. 判定と記録
+        # ----------------------------------------------------
+        investable_real = sim_nisa + max(sim_bank_pure - buffer_target_val, 0.0)
+        total_real = sim_nisa + sim_bank_pure + sim_goals
+        fi_ok_real = (investable_real >= float(fi_target_asset))
 
         rows.append({
             "date": dt,
             "total_real": total_real,
             "investable_real": investable_real,
-            "emergency_real": em,
-            "goals_fund_real": gf,
-            "nisa_real": ni,
-
-            "total_ideal": total_ideal,
-            "investable_ideal": investable_ideal,
-            "emergency_ideal": em_i,
-            "goals_fund_ideal": gf_i,
-            "nisa_ideal": ni_i,
-
+            "emergency_real": sim_bank_pure,
+            "goals_fund_real": sim_goals,
+            "nisa_real": sim_nisa,
             "outflow": outflow,
             "outflow_name": outflow_name,
-            "unpaid_real": unpaid_real,
-            "unpaid_ideal": unpaid_ideal,
-
+            "unpaid_real": unpaid,
             "fi_ok_real": fi_ok_real,
-            "fi_ok_ideal": fi_ok_ideal,
-
-            "ideal_pmt_investable": ideal_pmt_investable,
+            "investable_ideal": (pv_investable + ideal_pmt_investable * (i+1)) * ((1+r_nisa_monthly)**(i+1)), 
         })
-
-        if i == len(dates) - 1:
-            break
-
-        em = em + float(monthly_emergency_save_real)
-        gf = gf + float(monthly_goals_save_real)
-        ni = (ni + float(monthly_nisa_save_real)) * (1 + r)
-
-        gf_i = gf_i + float(monthly_goals_save_real)
-
-        add_nisa = float(ideal_pmt_investable) * float(ideal_nisa_ratio)
-        add_em = float(ideal_pmt_investable) * (1.0 - float(ideal_nisa_ratio))
-
-        em_i = em_i + add_em
-        ni_i = (ni_i + add_nisa) * (1 + r)
 
     df_sim = pd.DataFrame(rows)
     return df_sim
