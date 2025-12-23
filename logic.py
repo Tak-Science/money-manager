@@ -762,6 +762,10 @@ def simulate_fi_paths(today, current_age, end_age, annual_return,
             "nisa_real": sim_nisa,
             "emergency_real": sim_bank_pure,
             "goals_fund_real": sim_goals,
+            
+            # ★この行を追加してください！
+            "total_real": sim_nisa + sim_bank_pure + sim_goals,
+            
             "outflow": outflow,
             "unpaid_real": unpaid_amount,
             "outflow_name": " / ".join([x["name"] for x in items]) if items else ""
