@@ -18,7 +18,8 @@ st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 # ==================================================
 # app.py の plot_integrated_sim_chart 関数を上書き
 
-def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi_integrated_final"):
+# app.py の plot_integrated_sim_chart 関数内
+def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi_v3_final"):
     fig = go.Figure()
 
     # 1. 過去の実績
@@ -52,19 +53,19 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi
     # 3. 目標ライン
     fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
 
+    # ★改善点：レンジスライダーと期間ボタンを追加
     fig.update_layout(
         title="🔮 未来予測：真の投資可能資産の推移（生活防衛費除外）",
         xaxis_title="年月",
         yaxis_title="金額（円）",
         hovermode="x unified",
-        height=560,
-        # ★ここを追加：レンジスライダーと期間選択ボタン
+        height=600,
         xaxis=dict(
             rangeslider=dict(visible=True),
             type="date",
             rangeselector=dict(
                 buttons=list([
-                    dict(count=1, label="1年", step="year", stepmode="backward"),
+                    dict(count=2, label="2年", step="year", stepmode="backward"),
                     dict(count=5, label="5年", step="year", stepmode="backward"),
                     dict(count=10, label="10年", step="year", stepmode="backward"),
                     dict(step="all", label="全期間")
@@ -72,8 +73,25 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi
             )
         )
     )
-    # 重複エラー回避のため key を動的にするか削除する
     st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().microsecond}")
+
+# main関数内の詳細テーブル表示部分（tab2）
+    with tab2:
+        show = df_fi_sim.copy()
+        show["日付"] = show["date"].dt.strftime("%Y-%m")
+        show = show.rename(columns={
+            "investable_real": "投資可能資産(FI判定用)",
+            "nisa_real": "NISA残高(予測)",
+            "emergency_real": "銀行残高(生活費+防衛費)",
+            "goals_fund_real": "Goals準備金",
+            "unpaid_real": "🚨 Goals支払い不足額",
+            "total_real": "総資産合計"
+        })
+        
+        display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金", "🚨 Goals支払い不足額", "総資産合計"]
+        num_format_dict = {col: "{:,.0f} 円" for col in display_cols if col != "日付"}
+        
+        st.dataframe(show[display_cols].style.format(num_format_dict), use_container_width=True)
     
 def plot_goal_pie(title, achieved, total, key=None):
     achieved = float(max(achieved, 0.0))
