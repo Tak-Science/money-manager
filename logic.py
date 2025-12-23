@@ -635,6 +635,30 @@ def solve_required_monthly_pmt(pv, fv_target, r_month, n_months):
     pmt = (fv_target - pv * a) / denom
     return max(float(pmt), 0.0)
 
+# ★復活させた関数（ここがエラーの原因でした！）
+def estimate_realistic_monthly_contribution(df_balance, months=6):
+    if df_balance is None or df_balance.empty:
+        return 0.0
+
+    df = df_balance.copy()
+    df["日付"] = pd.to_datetime(df["日付"], errors="coerce")
+    df["銀行残高"] = pd.to_numeric(df["銀行残高"], errors="coerce")
+    df["NISA評価額"] = pd.to_numeric(df["NISA評価額"], errors="coerce")
+    df = df.dropna(subset=["日付"]).sort_values("日付")
+    if df.empty or len(df) < 2:
+        return 0.0
+
+    df["total"] = df["銀行残高"].fillna(0) + df["NISA評価額"].fillna(0)
+    df["month"] = df["日付"].dt.to_period("M").astype(str)
+    monthly_last = df.groupby("month", as_index=False)["total"].last()
+    monthly_last["diff"] = monthly_last["total"].diff()
+    diffs = monthly_last["diff"].dropna().tail(months)
+
+    if diffs.empty:
+        return 0.0
+    return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
+
+# シミュレーション実行関数
 def simulate_fi_paths(
     *,
     today,
