@@ -63,25 +63,39 @@ def calculate_monthly_fix_cost(df_fix, today):
 def calculate_monthly_variable_cost(df_forms, today):
     if df_forms is None or df_forms.empty:
         return 0.0
-    if not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+    
+    # 列名のゆらぎ吸収（'費目' または 'カテゴリ'）
+    col_cat = 'カテゴリ' if 'カテゴリ' in df_forms.columns else '費目'
+    
+    if not {"日付", "金額", col_cat}.issubset(set(df_forms.columns)):
         return 0.0
 
     current_month = today.strftime("%Y-%m")
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
-    return float(d[(d["month"] == current_month) & (d["費目"].isin(config.EXPENSE_CATEGORIES))]["金額"].sum())
+    
+    # 指定した支出カテゴリに含まれるものを集計
+    return float(d[(d["month"] == current_month) & (d[col_cat].isin(config.EXPENSE_CATEGORIES))]["金額"].sum())
 
+# ==================================================
+# 変動収入（今月）
+# ==================================================
 def calculate_monthly_variable_income(df_forms, today):
     if df_forms is None or df_forms.empty:
         return 0.0
-    if not {"日付", "金額", "費目"}.issubset(set(df_forms.columns)):
+        
+    # 列名のゆらぎ吸収
+    col_cat = 'カテゴリ' if 'カテゴリ' in df_forms.columns else '費目'
+
+    if not {"日付", "金額", col_cat}.issubset(set(df_forms.columns)):
         return 0.0
 
     current_month = today.strftime("%Y-%m")
     d = df_forms.copy()
     d["month"] = d["日付"].dt.strftime("%Y-%m")
-    return float(d[(d["month"] == current_month) & (d["費目"].isin(config.INCOME_CATEGORIES))]["金額"].sum())
-
+    
+    # 指定した収入カテゴリに含まれるものを集計
+    return float(d[(d["month"] == current_month) & (d[col_cat].isin(config.INCOME_CATEGORIES))]["金額"].sum())
 # ==================================================
 # 残高（最新）
 # ==================================================
