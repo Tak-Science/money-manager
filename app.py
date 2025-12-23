@@ -239,11 +239,11 @@ def main():
         if not out.empty:
             out["月"] = out["date"].dt.strftime("%Y-%m")
             st.dataframe(out[["月", "outflow_name", "outflow", "unpaid_real"]].rename(columns={"outflow":"支出額", "unpaid_real":"不足額"}), use_container_width=True)
-        with tab2:
-        # 表示用にデータをコピーして加工
+    with tab2:
+        # この下の行はすべて、with tab2: から見て右側にズレている必要があります
         show = df_fi_sim.copy()
         
-        # 1. 日付を文字列に変換（数値フォーマットの干渉を防ぐ）
+        # 1. 日付を文字列に変換
         show["日付"] = show["date"].dt.strftime("%Y-%m")
         
         # 2. 列名の日本語化
@@ -258,7 +258,7 @@ def main():
         # 3. 表示する列を整理して並び替え
         display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金(学費等)", "総資産合計"]
         
-        # 4. 数値だけカンマ区切りにするフォーマットを適用（日付列は除外）
+        # 4. 数値だけカンマ区切りにするフォーマットを適用
         num_format_dict = {col: "{:,.0f} 円" for col in display_cols if col != "日付"}
         
         st.dataframe(
