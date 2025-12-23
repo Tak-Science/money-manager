@@ -271,6 +271,23 @@ def main():
     with st.expander("📝 今月の支出分析・防衛費詳細"):
         # 1. 赤字要因分析のビジュアル化
         st.markdown("#### 🔍 赤字の内訳診断")
+        
+        # ★追加：収入と固定費の対比を表示
+        inc_col1, inc_col2 = st.columns(2)
+        with inc_col1:
+            st.write(f"📊 **今月の総収入:** {int(summary['monthly_income']):,} 円")
+        with inc_col2:
+            st.write(f"🏠 **今月の固定費:** {int(summary['fix_cost']):,} 円")
+        
+        # 固定費率の表示（参考）
+        fix_rate = (summary['fix_cost'] / summary['monthly_income'] * 100) if summary['monthly_income'] > 0 else 0
+        if fix_rate > 100:
+            st.error(f"⚠️ 固定費だけで収入を超えています（固定費率: {int(fix_rate)}%）")
+        else:
+            st.caption(f"（収入に対する固定費の割合: {int(fix_rate)}%）")
+
+        st.divider()
+
         if deficit:
             d_col1, d_col2 = st.columns(2)
             with d_col1:
