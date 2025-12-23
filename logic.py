@@ -695,6 +695,17 @@ def simulate_fi_paths(
     # バッファ(黄)の目安を計算
     base_monthly = ef_rec / 6 if ef_rec > 0 else 200000 
     buffer_target_val = base_monthly * config.BANK_GREEN_BUFFER_MONTHS
+
+# logic.py の simulate_fi_paths 内
+
+    # 4. 判定と記録
+    # 真の投資可能資産 = NISA + (銀行 - 生活防衛費)
+    # ※Goals(赤)は sim_bank_pure から既に引かれている
+    investable_real = sim_nisa + max(sim_bank_pure - ef_rec, 0.0)
+        
+    total_real = sim_nisa + sim_bank_pure + sim_goals
+    fi_ok_real = (investable_real >= float(fi_target_asset))
+
     
     # 期間設定 (Configから)
     runway_months_setting = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 18
