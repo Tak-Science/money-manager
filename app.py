@@ -16,9 +16,10 @@ st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 # ==================================================
 # 統合グラフ（実績＋シミュレーション）描画関数
 # ==================================================
-def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="integrated_chart"):
-    fig = go.Figure()
+# app.py の関数定義部分
 
+def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="integrated_chart_v2"):
+    fig = go.Figure()
     # 1. 過去の実績
     if df_balance is not None and not df_balance.empty:
         # (既存のコードと同じ)
@@ -58,7 +59,8 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="in
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
-
+    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().strftime('%M%S')}")
+    
 def plot_goal_pie(title, achieved, total, key=None):
     achieved = float(max(achieved, 0.0))
     total = float(max(total, 0.0))
