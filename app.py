@@ -250,11 +250,33 @@ def main():
     
     with col_left:
         st.subheader("👛 あといくら使える？")
+        
+        # 1. 計算ロジック
+        # 収入 - 固定費 - 積立（NISA+銀行） = 生活費の予算上限 (limit)
         limit = max(summary["monthly_income"] - summary["fix_cost"] - nisa_save - bank_save, 0.0)
         spent = summary["variable_cost"]
         rem = limit - spent
+        
+        # 2. 表示
         st.metric("🥗 残り予算", f"{int(max(rem, 0)):,} 円", delta=f"超過: {int(rem):,} 円" if rem < 0 else None, delta_color="inverse")
         st.progress(min(spent/limit, 1.0) if limit > 0 else 1.0)
+
+        # ★ここを追加：動的に数値が変わるヘルプ機能
+        with st.expander("ℹ️ 計算式と内訳を見る"):
+            st.markdown(f"""
+            **「使えるお金」＝ (収入 － 固定費 － 積立) － 今月の出費**
+            
+            | 項目 | 金額 |
+            | :--- | ---: |
+            | **💰 総収入** | **{int(summary['monthly_income']):,} 円** |
+            | 🏠 固定費 | - {int(summary['fix_cost']):,} 円 |
+            | 🏦 積立(銀行+NISA) | - {int(nisa_save + bank_save):,} 円 |
+            | **🥗 今月の生活予算** | **= {int(limit):,} 円** |
+            | 🍔 今月の出費(変動費) | - {int(spent):,} 円 |
+            | **残り予算** | **= {int(rem):,} 円** |
+            
+            ※ Parameterの「月収」を0にしたので、Googleフォームに入力した収入合計がそのまま「総収入」になります。
+            """)
 
     with col_right:
         st.subheader("🏦 銀行口座の内訳")
