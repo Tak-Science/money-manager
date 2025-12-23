@@ -52,8 +52,26 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi
     # 3. 目標ライン
     fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
 
-    fig.update_layout(title="🔮 未来予測：真の投資可能資産の推移（生活防衛費除外）", xaxis_title="年月", yaxis_title="金額（円）", hovermode="x unified", height=560)
-    
+    fig.update_layout(
+        title="🔮 未来予測：真の投資可能資産の推移（生活防衛費除外）",
+        xaxis_title="年月",
+        yaxis_title="金額（円）",
+        hovermode="x unified",
+        height=560,
+        # ★ここを追加：レンジスライダーと期間選択ボタン
+        xaxis=dict(
+            rangeslider=dict(visible=True),
+            type="date",
+            rangeselector=dict(
+                buttons=list([
+                    dict(count=1, label="1年", step="year", stepmode="backward"),
+                    dict(count=5, label="5年", step="year", stepmode="backward"),
+                    dict(count=10, label="10年", step="year", stepmode="backward"),
+                    dict(step="all", label="全期間")
+                ])
+            )
+        )
+    )
     # 重複エラー回避のため key を動的にするか削除する
     st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().microsecond}")
     
