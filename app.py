@@ -275,8 +275,7 @@ def main():
             | 🍔 今月の出費(変動費) | - {int(spent):,} 円 |
             | **残り予算** | **= {int(rem):,} 円** |
             
-            ※ Parameterの「月収」を0にしたので、Googleフォームに入力した収入合計がそのまま「総収入」になります。
-            """)
+            )
 
     with col_right:
         st.subheader("🏦 銀行口座の内訳")
