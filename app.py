@@ -187,6 +187,11 @@ def main():
     
     if tax_status:
         st.subheader("🛡️ 税金・扶養監視アラート")
+        # logic.py の戻り値には 'salary_total'（額面合計）も入っています
+        total_revenue = float(tax_status['salary_total']) + float(tax_status['side_total'])
+        
+        # 額面を表示する行を追加
+        st.caption(f"💰 今年の額面収入合計: {int(total_revenue):,} 円 (給与控除前の金額)")
         
         # 1. 扶養の壁（103万の壁 ＝ 所得48万）
         dep_limit = float(params.get('DEPENDENT_INCOME_LIMIT', 480000))
