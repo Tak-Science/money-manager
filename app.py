@@ -17,57 +17,45 @@ st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 # 統合グラフ（実績＋シミュレーション）描画関数
 # ==================================================
 def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="integrated_chart"):
-    """
-    過去の実績（Balance_Log）と未来の予測（df_sim）を一つのグラフに統合して表示する。
-    """
     fig = go.Figure()
 
-    # 1. 過去の実績プロット
+    # 1. 過去の実績
     if df_balance is not None and not df_balance.empty:
+        # (既存のコードと同じ)
         df_hist = df_balance.copy().dropna(subset=["日付"]).sort_values("日付")
         df_hist["投資可能資産"] = pd.to_numeric(df_hist["銀行残高"], errors="coerce").fillna(0) + \
                                pd.to_numeric(df_hist["NISA評価額"], errors="coerce").fillna(0)
-        
-        fig.add_trace(go.Scatter(
-            x=df_hist["日付"], y=df_hist["投資可能資産"],
-            mode="lines+markers", name="📈 実績（投資可能資産）",
-            line=dict(color="royalblue", width=3)
-        ))
+        fig.add_trace(go.Scatter(x=df_hist["日付"], y=df_hist["投資可能資産"], mode="lines+markers", name="📈 実績", line=dict(color="royalblue", width=3)))
 
-    # 2. 未来の予測プロット
+    # 2. 未来の予測（厳格な投資可能資産）
     if df_sim is not None and not df_sim.empty:
-        # 予測開始点を実績の最後と繋げるために処理
         fig.add_trace(go.Scatter(
             x=df_sim["date"], y=df_sim["investable_real"],
-            mode="lines", name="🔮 予測（投資可能資産）",
+            mode="lines", name="🔮 予測（真の投資可能資産）",
             line=dict(color="royalblue", width=3, dash="dash"),
-            hovertemplate="日付: %{x|%Y-%m}<br>金額: %{y:,.0f} 円<extra></extra>"
+            hovertemplate="日付: %{x|%Y-%m}<br>真の資産: %{y:,.0f} 円<br>※防衛費・Goalsを除く<extra></extra>"
         ))
-        
-        # 合計資産（Goals含む）
-        fig.add_trace(go.Scatter(
-            x=df_sim["date"], y=df_sim["total_real"],
-            mode="lines", name="📦 予測合計（Goals含む）",
-            line=dict(color="gray", width=1, dash="dot"),
-            visible="legendonly"
-        ))
+
+        # ★追加：支出イベントの可視化
+        events = df_sim[df_sim["outflow"] > 0]
+        if not events.empty:
+            fig.add_trace(go.Scatter(
+                x=events["date"],
+                y=events["investable_real"],
+                mode="markers+text",
+                name="💸 支出イベント",
+                marker=dict(symbol="triangle-down", size=12, color="orange"),
+                text=events["outflow_name"],
+                textposition="bottom center",
+                hovertemplate="内容: %{text}<br>支出額: %{customdata:,.0f} 円<extra></extra>",
+                customdata=events["outflow"]
+            ))
 
     # 3. 目標ライン
-    fig.add_hline(
-        y=float(fi_target_asset),
-        line_dash="dash", line_color="red",
-        annotation_text="🏁 FI必要資産",
-        annotation_position="top left",
-    )
+    fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
 
-    fig.update_layout(
-        title="🔮 資産推移（過去実績 ➔ 未来予測）",
-        xaxis_title="年月",
-        yaxis_title="金額（円）",
-        hovermode="x unified",
-        height=560,
-        xaxis=dict(rangeslider=dict(visible=True), type="date") # レンジスライダー追加
-    )
+    fig.update_layout(title="🔮 未来予測：真の投資可能資産の推移", xaxis_title="年月", yaxis_title="金額（円）", hovermode="x unified", height=560)
+    st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
     st.plotly_chart(fig, use_container_width=True, key=chart_key)
 
