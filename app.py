@@ -189,9 +189,9 @@ def main():
         st.subheader("🛡️ 税金・扶養監視アラート")
         
         # 1. 扶養の壁（103万の壁 ＝ 所得48万）
-        dep_limit = params.get('DEPENDENT_INCOME_LIMIT', 480000)
-        progress = min(tax_status['total_taxable_income'] / dep_limit, 1.0)
-        remaining = dep_limit - tax_status['total_taxable_income']
+        dep_limit = float(params.get('DEPENDENT_INCOME_LIMIT', 480000))
+        progress = min(float(tax_status['total_taxable_income']) / dep_limit, 1.0)
+        remaining = dep_limit - float(tax_status['total_taxable_income'])
         
         col_t1, col_t2 = st.columns([3, 1])
         with col_t1:
@@ -203,8 +203,8 @@ def main():
             st.metric("扶養まで残り", f"{int(remaining):,} 円")
 
         # 2. 住民税・確定申告のアラート
-        kunto_limit = params.get('HADANO_KUNTO_LIMIT', 380000)
-        side_limit = params.get('SIDE_INCOME_REPORT_LIMIT', 200000)
+        kunto_limit = float(params.get('HADANO_KUNTO_LIMIT', 380000))
+        side_limit = float(params.get('SIDE_INCOME_REPORT_LIMIT', 200000))
         
         c1, c2, c3 = st.columns(3)
         with c1:
