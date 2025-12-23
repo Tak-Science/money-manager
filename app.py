@@ -174,7 +174,48 @@ def main():
     k4.metric("🎯 Goals積立（実績）", f"{int(goals_save_recorded):,} 円", delta=delta_str)
 
     st.divider()
+    
+    # 税金監視KPI
+    tax_status = lg.calculate_tax_status(df_income, params) # df_incomeは収入ログデータ
+    
+    if tax_status:
+        st.subheader("🛡️ 税金・扶養監視アラート")
+        
+        # 1. 扶養の壁（103万の壁 ＝ 所得48万）
+        dep_limit = params.get('DEPENDENT_INCOME_LIMIT', 480000)
+        progress = min(tax_status['total_taxable_income'] / dep_limit, 1.0)
+        remaining = dep_limit - tax_status['total_taxable_income']
+        
+        col_t1, col_t2 = st.columns([3, 1])
+        with col_t1:
+            # 進捗バーの表示
+            bar_color = "green" if progress < 0.8 else "orange" if progress < 0.95 else "red"
+            st.progress(progress)
+            st.caption(f"親の扶養（所得48万円ライン）までの進捗: {progress:.1%}")
+        with col_t2:
+            st.metric("扶養まで残り", f"{int(remaining):,} 円")
 
+        # 2. 住民税・確定申告のアラート
+        kunto_limit = params.get('HADANO_KUNTO_LIMIT', 380000)
+        side_limit = params.get('SIDE_INCOME_REPORT_LIMIT', 200000)
+        
+        c1, c2, c3 = st.columns(3)
+        with c1:
+            if tax_status['total_taxable_income'] > kunto_limit:
+                st.warning("🏮 秦野市: 住民税(均等割)発生圏内")
+            else:
+                st.success("✅ 秦野市: 住民税 非課税圏内")
+        
+        with c2:
+            if tax_status['side_total'] > side_limit:
+                st.error("📝 所得税: 確定申告が必要です")
+            elif tax_status['side_total'] > 0:
+                st.info("ℹ️ 住民税の申告が必要です")
+        
+        with c3:
+            st.metric("副業純利益(推計)", f"{int(tax_status['side_net_profit']):,} 円")
+
+        st.divider()
     # ==================================================
     # 👛 予算モニター & 🏦 仮想内訳
     # ==================================================
