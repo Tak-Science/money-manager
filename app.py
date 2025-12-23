@@ -139,11 +139,9 @@ def main():
     
     # 1. データ読み込み
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.load_data()
-
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
-
     today = datetime.today()
 
     # 2. パラメータ取得
@@ -204,7 +202,7 @@ def main():
 
     nisa_save = allocation["nisa_save"]
     bank_save = allocation["bank_save"]
-    # goals_save_actual は「計画値（Logic計算）」なので、ここではシミュレーション用として保持
+    # シミュレーション用には、今回の「計画値」を使う
     goals_save_plan_calc = allocation["goals_save"]
     
     goals_shortfall = allocation["goals_shortfall"]
@@ -233,11 +231,21 @@ def main():
         f"{nisa_save:,} 円",
         help=nisa_help
     )
-    
+
+    # ----------------------------------------------------
+    # ★修正ポイント：Goals実績を「先に」取得し、計算に組み込む
+    # ----------------------------------------------------
+    goals_save_recorded = lg.goals_log_monthly_actual(df_goals_log, today)
+
     # 3. Goals積立可能枠（計算：Plan）
     # ----------------------------------------------------
     buffer_target_val = monthly_p75 * config.BANK_GREEN_BUFFER_MONTHS
-    excess_wealth_for_goals = max(stock_surplus - buffer_target_val, 0.0)
+    
+    # ★重要：今月のGoals実績（記録済み）を余剰に戻して、「もし払ってなかったら」の状態を再現する
+    # これにより、支払い後も「今月の可能枠（目標）」が減らない
+    current_stock_surplus_adjusted = stock_surplus + goals_save_recorded
+    
+    excess_wealth_for_goals = max(current_stock_surplus_adjusted - buffer_target_val, 0.0)
     
     months_div = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 12
     capped_stock_surplus = excess_wealth_for_goals / months_div if months_div > 0 else 0
@@ -247,8 +255,9 @@ def main():
     # これが「今月積立すべき金額（Plan）」
     real_goals_capacity = current_flow_surplus + capped_stock_surplus
     
+    # Help情報の計算
     total_power = excess_wealth_for_goals + current_flow_surplus
-    gap_to_buffer = max(buffer_target_val - stock_surplus, 0.0)
+    gap_to_buffer = max(buffer_target_val - current_stock_surplus_adjusted, 0.0)
 
     if gap_to_buffer > 0:
         help_text = f"""
@@ -263,8 +272,8 @@ def main():
         ・収入から：{int(current_flow_surplus):,} 円
         ・銀行余剰から：{int(capped_stock_surplus):,} 円
         
-        ※ 銀行余剰 {int(excess_wealth_for_goals):,} 円 を、
-        向こう {months_div} ヶ月で配分するペース（{int(capped_stock_surplus):,}円/月）で切り出しています。
+        ※ 今月の入金済額を含めた余剰 {int(excess_wealth_for_goals):,} 円 を、
+        向こう {months_div} ヶ月で配分するペースで算出しています。
         """
 
     k3.metric(
@@ -274,13 +283,8 @@ def main():
     )
     
     # 4. Goals積立（実績：Record）
-    # ★修正：ここは「スプレッドシート（df_goals_log）の記録」を表示する
-    goals_save_recorded = lg.goals_log_monthly_actual(df_goals_log, today)
-    
     if real_goals_capacity > 0:
         # 目標（可能枠）に対する達成度を表示
-        diff = goals_save_recorded - real_goals_capacity
-        
         # ほぼ達成（99%以上）ならOK
         if goals_save_recorded >= real_goals_capacity * 0.99:
             delta_str = "目標達成！ 🎉"
@@ -372,18 +376,10 @@ def main():
     # ==================================================
     st.subheader("👛 今月の生活費・ゆとり費（あといくら使える？）")
 
-    # 1. 今月の「使えるお金」の総枠（Max Budget）
-    # 収入から「固定費」と「聖域（NISA/銀行）」を引いたもの
-    # ※Goalsは余剰から出す設定にしているので、ここには含めず「生活費」を優先確保します
     spending_limit_from_income = max(summary["monthly_income"] - summary["fix_cost"] - nisa_save - bank_save, 0.0)
-
-    # 2. すでに使った変動費
     current_spent = summary["variable_cost"]
-
-    # 3. 残り予算
     remaining_budget = spending_limit_from_income - current_spent
 
-    # 表示レイアウト
     b1, b2, b3 = st.columns([1, 1, 2])
 
     b1.metric(
@@ -398,9 +394,7 @@ def main():
         help="食費、日用品、娯楽費などの合計です。"
     )
 
-    # 残り予算の判定表示
     if remaining_budget >= 0:
-        # 黒字進行中
         b3.metric(
             "🥗 残り予算（外食・娯楽OK）",
             f"{int(remaining_budget):,} 円",
@@ -408,13 +402,11 @@ def main():
             delta_color="normal",
             help="この金額の範囲内なら、外食してもバッファ（貯金）は減りません！"
         )
-        # 予算消化率のバー
         if spending_limit_from_income > 0:
             pct = min(current_spent / spending_limit_from_income, 1.0)
             st.progress(pct, text=f"予算消化率: {int(pct*100)}%")
         
     else:
-        # 赤字（予算オーバー）
         over_amount = abs(remaining_budget)
         b3.metric(
             "🥗 残り予算",
@@ -428,6 +420,7 @@ def main():
     st.caption("※ この「残り予算」を使い切らずに残すと、その分が自動的に「Goals積立」や「バッファ補充」に回ります。")
 
     st.divider()
+
     # ==================================================
     # 🏦 銀行口座の「仮想内訳」見える化
     # ==================================================
@@ -660,7 +653,6 @@ def main():
     # ==================================================
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
 
-    # シミュレーション用には、今回の「計画値」を使う
     plan_total = float(bank_save + nisa_save + goals_save_plan_calc)
     if plan_total > 0:
         share_bank = bank_save / plan_total
@@ -762,6 +754,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
-
-
