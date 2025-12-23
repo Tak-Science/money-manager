@@ -183,7 +183,7 @@ def main():
     st.divider()
     
     # 税金監視KPI
-    tax_status = lg.calculate_tax_status(df_income, params) # df_incomeは収入ログデータ
+    tax_status = lg.calculate_tax_status(df_forms, params) # df_forms を渡す
     
     if tax_status:
         st.subheader("🛡️ 税金・扶養監視アラート")
