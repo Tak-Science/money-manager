@@ -269,8 +269,50 @@ def main():
     # その他詳細（既存機能）
     # ==================================================
     with st.expander("📝 今月の支出分析・防衛費詳細"):
-        st.write(f"赤字要因分析: {deficit}")
-        st.write(f"生活防衛費 算出根拠: {ef['method']}")
+        # 1. 赤字要因分析のビジュアル化
+        st.markdown("#### 🔍 赤字の内訳診断")
+        if deficit:
+            d_col1, d_col2 = st.columns(2)
+            with d_col1:
+                st.error(f"**合計赤字額: {int(deficit['total_deficit']):,} 円**")
+                st.caption("※収入を支出が上回っている状態です")
+            
+            with d_col2:
+                if deficit['fix_over'] > 0:
+                    st.warning(f"🏠 **固定費オーバー: {int(deficit['fix_over']):,} 円**")
+                if deficit['var_over'] > 0:
+                    st.warning(f"🍔 **変動費オーバー: {int(deficit['var_over']):,} 円**")
+            
+            # 詳しい比較
+            st.markdown(f"""
+            - **固定費:** 実際の額が月収を超えています
+            - **変動費の適正目安:** {int(deficit['var_expected']):,} 円 （月収の30%と仮定）
+            - **実際の変動費支出:** {int(deficit['var_actual']):,} 円
+            """)
+        else:
+            st.success("✨ 今月は黒字です！収支バランスは良好です。")
+
+        st.divider()
+
+        # 2. 生活防衛費の詳細
+        st.markdown("#### 🛡️ 生活防衛費の算出根拠")
+        e_col1, e_col2, e_col3 = st.columns(3)
+        
+        with e_col1:
+            st.write("**目標とする月数**")
+            st.write(f"{ef['months_factor']} か月分")
+            
+        with e_col2:
+            st.write("**判定基準額**")
+            st.write(f"{int(ef['monthly_est_p75']):,} 円/月")
+            st.caption("(過去P75値)")
+            
+        with e_col3:
+            st.write("**現在の目標総額**")
+            st.write(f"**{int(ef['fund_rec']):, Lowell} 円**")
+
+        st.info(f"💡 算出方法: {ef['method']}。直近の生活費が高くなると、目標額も自動で調整されます。")
+
 
     with st.expander("🎯 Goals個別進捗"):
         if not df_goals_progress.empty:
