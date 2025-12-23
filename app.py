@@ -101,6 +101,13 @@ def main():
     )
     today = datetime.today()
 
+    # df_paramsを辞書形式に変換（params.get()を使えるようにする）
+    params = dict(zip(df_params["項目"], df_params["値"]))
+
+    # 税金・扶養監視ステータスの計算
+    # 第1引数は df_forms (収入データが含まれるもの) を渡します
+    tax_status = lg.calculate_tax_status(df_forms, params)
+    
     # 2. パラメータ取得
     goals_horizon_years = lg.to_int_safe(lg.get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
     swr_assumption = lg.to_float_safe(lg.get_latest_parameter(df_params, "SWR", today), default=0.035)
