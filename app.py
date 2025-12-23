@@ -16,19 +16,19 @@ st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 # ==================================================
 # 統合グラフ（実績＋シミュレーション）描画関数
 # ==================================================
-# app.py の関数定義部分
+# app.py の plot_integrated_sim_chart 関数を上書き
 
-def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="integrated_chart_v2"):
+def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi_integrated_final"):
     fig = go.Figure()
+
     # 1. 過去の実績
     if df_balance is not None and not df_balance.empty:
-        # (既存のコードと同じ)
         df_hist = df_balance.copy().dropna(subset=["日付"]).sort_values("日付")
         df_hist["投資可能資産"] = pd.to_numeric(df_hist["銀行残高"], errors="coerce").fillna(0) + \
                                pd.to_numeric(df_hist["NISA評価額"], errors="coerce").fillna(0)
         fig.add_trace(go.Scatter(x=df_hist["日付"], y=df_hist["投資可能資産"], mode="lines+markers", name="📈 実績", line=dict(color="royalblue", width=3)))
 
-    # 2. 未来の予測（厳格な投資可能資産）
+    # 2. 未来の予測
     if df_sim is not None and not df_sim.empty:
         fig.add_trace(go.Scatter(
             x=df_sim["date"], y=df_sim["investable_real"],
@@ -37,17 +37,14 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="in
             hovertemplate="日付: %{x|%Y-%m}<br>真の資産: %{y:,.0f} 円<br>※防衛費・Goalsを除く<extra></extra>"
         ))
 
-        # ★追加：支出イベントの可視化
+        # ★支出イベントの可視化
         events = df_sim[df_sim["outflow"] > 0]
         if not events.empty:
             fig.add_trace(go.Scatter(
-                x=events["date"],
-                y=events["investable_real"],
-                mode="markers+text",
-                name="💸 支出イベント",
+                x=events["date"], y=events["investable_real"],
+                mode="markers+text", name="💸 支出予定",
                 marker=dict(symbol="triangle-down", size=12, color="orange"),
-                text=events["outflow_name"],
-                textposition="bottom center",
+                text=events["outflow_name"], textposition="bottom center",
                 hovertemplate="内容: %{text}<br>支出額: %{customdata:,.0f} 円<extra></extra>",
                 customdata=events["outflow"]
             ))
@@ -55,11 +52,10 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="in
     # 3. 目標ライン
     fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
 
-    fig.update_layout(title="🔮 未来予測：真の投資可能資産の推移", xaxis_title="年月", yaxis_title="金額（円）", hovermode="x unified", height=560)
-    st.plotly_chart(fig, use_container_width=True, key=chart_key)
-
-    st.plotly_chart(fig, use_container_width=True, key=chart_key)
-    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().strftime('%M%S')}")
+    fig.update_layout(title="🔮 未来予測：真の投資可能資産の推移（生活防衛費除外）", xaxis_title="年月", yaxis_title="金額（円）", hovermode="x unified", height=560)
+    
+    # 重複エラー回避のため key を動的にするか削除する
+    st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().microsecond}")
     
 def plot_goal_pie(title, achieved, total, key=None):
     achieved = float(max(achieved, 0.0))
