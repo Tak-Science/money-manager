@@ -789,36 +789,36 @@ def simulate_fi_paths(today, current_age, end_age, annual_return,
 # ==================================================
 # 「実質所得」の計算ロジック
 # ==================================================
-def calculate_tax_status(df_income, params):
+def calculate_tax_status(df_forms, params):
     """
     収入データを分類し、税金・扶養の進捗を計算する
     """
-    if df_income is None or df_income.empty:
+    if df_forms is None or df_forms.empty:
         return None
 
     # 今年（当年）のデータのみを抽出
     current_year = pd.Timestamp.now().year
     
     # 日付列を確実にdatetime型に変換
-    df_income['日付'] = pd.to_datetime(df_income['日付'])
-    df_this_year = df_income[df_income['日付'].dt.year == current_year].copy()
+    df_forms = df_forms.copy()
+    df_forms['日付'] = pd.to_datetime(df_forms['日付'])
+    df_this_year = df_forms[df_forms['日付'].dt.year == current_year].copy()
+
+    # 列名の特定（「カテゴリ」がなければ「費目」を使う）
+    col_name = 'カテゴリ' if 'カテゴリ' in df_this_year.columns else '費目'
 
     # 1. 収入を3層に分類して集計
-    # フォームで設定した「カテゴリ」名と完全一致させる必要があります
-    salary_total = df_this_year[df_this_year['カテゴリ'] == '給与収入（バイト代・大学からの給与など）']['金額'].sum()
-    side_total = df_this_year[df_this_year['カテゴリ'] == '副業・雑収入（note・案件・講演謝礼など）']['金額'].sum()
-    tax_free_total = df_this_year[df_this_year['カテゴリ'] == '非課税収入（仕送り・奨学金・お祝いなど）']['金額'].sum()
+    salary_total = df_this_year[df_this_year[col_name] == '給与収入（バイト代・大学からの給与など）']['金額'].sum()
+    side_total = df_this_year[df_this_year[col_name] == '副業・雑収入（note・案件・講演謝礼など）']['金額'].sum()
+    tax_free_total = df_this_year[df_this_year[col_name] == '非課税収入（仕送り・奨学金・お祝いなど）']['金額'].sum()
 
     # 2. 所得への変換計算
-    # 給与所得: 額面から最低55万円を引く（55万以下なら0）
     salary_deduction = float(params.get('SALARY_DEDUCTION_MIN', 550000))
     salary_income = max(salary_total - salary_deduction, 0.0)
 
-    # 副業所得: 売上から手数料（20%想定）を引く
     note_fee_rate = float(params.get('NOTE_FEE_RATE', 0.2))
     side_income = side_total * (1.0 - note_fee_rate)
 
-    # 合計所得金額（税金判定の基準）
     total_taxable_income = salary_income + side_income
 
     return {
