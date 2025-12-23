@@ -780,24 +780,34 @@ def simulate_fi_paths(today, current_age, end_age, annual_return,
         month_key = pd.Period(dt, freq="M").strftime("%Y-%m")
 
         # ----------------------------------------------------
-        # 1. 支出イベント（Goals）の発生と「未払い」の計算
+        # 1. 支出イベント（Goals）修正版
         # ----------------------------------------------------
         items = outflows_by_month.get(month_key, [])
         outflow = float(sum(x["amount"] for x in items)) if items else 0.0
         
-        # 支払いルール：防衛費を維持できる範囲でしか払わない
-        # 支払える最大額 = (現在の銀行残高 + Goals積立金) - 防衛費
-        available_to_pay = max((sim_bank_pure + sim_goals) - ef_rec, 0.0)
+        # ★ここを修正: 支払能力の計算（防衛費を死守する！）
         
+        # 使えるお金 = 「Goals積立金」 + 「銀行にある余剰金（防衛費を超えた分だけ）」
+        # ※もし銀行残高が防衛費以下なら、銀行からは 1円 も出さない
+        surplus_in_bank = max(sim_bank_pure - ef_rec, 0.0)
+        available_to_pay = sim_goals + surplus_in_bank
+        
+        # 実際の支払い実行
         actual_payment = min(outflow, available_to_pay)
-        unpaid_amount = outflow - actual_payment  # ★これが「未払い」
         
-        # 実際の資産から引く（まずGoals積立金から、足りなければ銀行から）
+        # 足りない分は「不足額」として計上（銀行を0にするよりマシ！）
+        unpaid_amount = outflow - actual_payment
+        
+        # 資産からの引き落とし処理
+        # まずGoals積立金から払う
         pay_from_goals = min(sim_goals, actual_payment)
         sim_goals -= pay_from_goals
+        
+        # 足りなければ銀行の「余剰分」から払う
         pay_from_bank = actual_payment - pay_from_goals
         sim_bank_pure -= pay_from_bank
-
+        
+        # ※このロジックなら、sim_bank_pure が ef_rec を下回ることはありません
         # ----------------------------------------------------
         # 2. 収入と積立（ブレーキ機能付き）
         # ----------------------------------------------------
