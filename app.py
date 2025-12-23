@@ -139,30 +139,12 @@ def main():
     
     # 1. データ読み込み
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.load_data()
-    
-    # ▼▼▼ 【ここに追加】デバッグ表示1：読み込み直後の生データ ▼▼▼
-    with st.expander("🔍 診断1：スプレッドシートから読み込んだままのデータ"):
-        if df_goals_log is None:
-            st.error("データが空（None）です！シート名『Goals_Save_Log』は合っていますか？")
-        else:
-            st.dataframe(df_goals_log)
-    # ▲▲▲ ここまで ▲▲▲
 
     df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log = dl.preprocess_data(
         df_params, df_fix, df_forms, df_balance, df_goals, df_goals_log
     )
-    
-    # ▼▼▼ 【ここに追加】デバッグ表示2：日付変換後のデータ ▼▼▼
-    with st.expander("🔍 診断2：日付処理などをした後のデータ"):
-        if df_goals_log is None or df_goals_log.empty:
-            st.warning("処理後にデータが空になりました。日付や金額の形式が読めていない可能性があります。")
-        else:
-            st.dataframe(df_goals_log)
-            st.write("今のカラム名:", df_goals_log.columns.tolist())
-    # ▲▲▲ ここまで ▲▲▲
 
     today = datetime.today()
-    # ... (以下、元のコードへ続く)
 
     # 2. パラメータ取得
     goals_horizon_years = lg.to_int_safe(lg.get_latest_parameter(df_params, "Goals積立対象年数", today), default=5)
@@ -780,5 +762,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
