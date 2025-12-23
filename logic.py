@@ -769,8 +769,9 @@ def simulate_fi_paths(
         # ----------------------------------------------------
         # 4. 判定と記録
         # ----------------------------------------------------
-        # 厳格なFI資産定義: NISA + (Bank - Buffer)
-        investable_real = sim_nisa + max(sim_bank_pure - buffer_target_val, 0.0)
+        # 厳格なFI資産定義: NISA + (銀行残高 - 生活防衛費)
+        # ※Goalsはすでにsim_bank_pureから分離されている前提
+        investable_real = sim_nisa + max(sim_bank_pure - ef_rec, 0.0)
         
         total_real = sim_nisa + sim_bank_pure + sim_goals
         
