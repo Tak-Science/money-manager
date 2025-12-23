@@ -659,68 +659,73 @@ def estimate_realistic_monthly_contribution(df_balance, months=6):
     return float(diffs[diffs > 0].mean()) if (diffs > 0).any() else 0.0
 
 # シミュレーション実行関数
-def simulate_fi_paths(
-    *,
-    today,
-    current_age,
-    end_age,
-    annual_return,
-    current_emergency_cash, # 銀行残高 - Goals (純粋な銀行残高)
-    current_goals_fund,     # Goals預かり金
-    current_nisa,           # NISA評価額
-    monthly_emergency_save_real,
-    monthly_goals_save_real,
-    monthly_nisa_save_real,
-    fi_target_asset,
-    outflows_by_month,
-    ef_rec,
-):
-    # 年利換算 (NISA用)
-    r_nisa_monthly = (1 + float(annual_return)) ** (1 / 12) - 1 if float(annual_return) > -1 else 0.0
+def simulate_fi_paths(today, current_age, end_age, annual_return, 
+                      current_emergency_cash, current_goals_fund, current_nisa,
+                      monthly_emergency_save_real, monthly_goals_save_real, monthly_nisa_save_real,
+                      fi_target_asset, outflows_by_month, ef_rec):
     
-    # 期間設定
-    months_left = int(max((float(end_age) - float(current_age)) * 12, 1))
-    dates = pd.date_range(start=pd.to_datetime(today).normalize(), periods=months_left + 1, freq="MS")
+    months = int((end_age - current_age) * 12)
+    dates = pd.date_range(start=today, periods=months, freq='MS')
+    
+    r_nisa_monthly = (1 + annual_return)**(1/12) - 1
+    runway_months_setting = 18
 
-    # 初期状態
-    # 1. Bank (Cash) - 無利子
-    # current_emergency_cash は「銀行全体 - Goals」つまり「防衛費+余剰」
-    sim_goals = float(current_goals_fund) # 赤
-    sim_bank_pure = float(current_emergency_cash) # 黄+緑
-    
-    # 2. NISA (Investment) - 複利
+    sim_bank_pure = float(current_emergency_cash) # 防衛費を含む純粋な銀行残高
+    sim_goals = float(current_goals_fund)
     sim_nisa = float(current_nisa)
 
-    # 3. ランウェイ計算用（初期余剰）
-    # バッファ(黄)の目安を計算
-    base_monthly = ef_rec / 6 if ef_rec > 0 else 200000 
-    buffer_target_val = base_monthly * config.BANK_GREEN_BUFFER_MONTHS
-
-# logic.py の simulate_fi_paths 内
-
-    # 4. 判定と記録
-    # 真の投資可能資産 = NISA + (銀行 - 生活防衛費)
-    # ※Goals(赤)は sim_bank_pure から既に引かれている
-    investable_real = sim_nisa + max(sim_bank_pure - ef_rec, 0.0)
-        
-    total_real = sim_nisa + sim_bank_pure + sim_goals
-    fi_ok_real = (investable_real >= float(fi_target_asset))
-
-    
-    # 期間設定 (Configから)
-    runway_months_setting = config.STOCK_TRANSFER_DURATION_MONTHS if hasattr(config, "STOCK_TRANSFER_DURATION_MONTHS") else 18
-    if runway_months_setting <= 0: runway_months_setting = 1
-
-    # 理想計算用の変数（参考値）
-    pv_investable = float(current_emergency_cash) + float(current_nisa)
-    ideal_pmt_investable = solve_required_monthly_pmt(
-        pv=pv_investable,
-        fv_target=float(fi_target_asset),
-        r_month=r_nisa_monthly,
-        n_months=months_left
-    )
-    
     rows = []
+    for dt in dates:
+        month_key = dt.strftime("%Y-%m")
+        
+        # --- 1. 支出イベントの処理（防衛費を死守） ---
+        items = outflows_by_month.get(month_key, [])
+        outflow_total = float(sum(x["amount"] for x in items)) if items else 0.0
+        
+        # 防衛費(ef_rec)を引いた「今、支払いに回せる現金」の合計
+        available_cash_to_pay = max((sim_bank_pure + sim_goals) - ef_rec, 0.0)
+        
+        # 実際に支払う額（防衛費を削らない範囲で）
+        actual_payment = min(outflow_total, available_cash_to_pay)
+        unpaid_amount = outflow_total - actual_payment # これが「未払い」として記録される
+        
+        # 資産からの差し引き（Goals積立金 -> 銀行残高の順）
+        pay_from_goals = min(sim_goals, actual_payment)
+        sim_goals -= pay_from_goals
+        pay_from_bank = actual_payment - pay_from_goals
+        sim_bank_pure -= pay_from_bank
+
+        # --- 2. 収入と積立（ブレーキ機能付き） ---
+        # 銀行残高が防衛費を超えている場合のみ、18ヶ月分散でNISAに回す
+        current_surplus = max(sim_bank_pure - ef_rec, 0.0)
+        stock_power = current_surplus / runway_months_setting if current_surplus > 0 else 0.0
+
+        # 毎月の積立
+        sim_bank_pure += float(monthly_emergency_save_real)
+        sim_goals += float(monthly_goals_save_real)
+        sim_nisa += (float(monthly_nisa_save_real) + stock_power)
+        if stock_power > 0:
+            sim_bank_pure -= stock_power
+
+        # --- 3. 運用益と記録 ---
+        sim_nisa *= (1 + r_nisa_monthly)
+        
+        # FI判定用：真の投資可能資産（Goalsも防衛費も除外した「緑のお金」）
+        investable_real = sim_nisa + max(sim_bank_pure - ef_rec, 0.0)
+
+        rows.append({
+            "date": dt,
+            "investable_real": investable_real,
+            "nisa_real": sim_nisa,
+            "emergency_real": sim_bank_pure,
+            "goals_fund_real": sim_goals,
+            "total_real": sim_nisa + sim_bank_pure + sim_goals,
+            "outflow": outflow_total,
+            "unpaid_real": unpaid_amount, # 未払い額
+            "outflow_name": " / ".join([x["name"] for x in items]) if items else ""
+        })
+
+    return pd.DataFrame(rows)
     
 # logic.py の simulate_fi_paths 関数内を修正
 
