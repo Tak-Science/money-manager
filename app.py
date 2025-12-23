@@ -239,9 +239,32 @@ def main():
         if not out.empty:
             out["月"] = out["date"].dt.strftime("%Y-%m")
             st.dataframe(out[["月", "outflow_name", "outflow", "unpaid_real"]].rename(columns={"outflow":"支出額", "unpaid_real":"不足額"}), use_container_width=True)
-    with tab2:
-        st.dataframe(df_fi_sim[["date", "investable_real", "nisa_real", "emergency_real", "goals_fund_real"]].style.format("{:,.0f}"), use_container_width=True)
-
+        with tab2:
+        # 表示用にデータをコピーして加工
+        show = df_fi_sim.copy()
+        
+        # 1. 日付を文字列に変換（数値フォーマットの干渉を防ぐ）
+        show["日付"] = show["date"].dt.strftime("%Y-%m")
+        
+        # 2. 列名の日本語化
+        show = show.rename(columns={
+            "investable_real": "投資可能資産(FI判定用)",
+            "nisa_real": "NISA残高(予測)",
+            "emergency_real": "銀行残高(生活費+防衛費)",
+            "goals_fund_real": "Goals準備金(学費等)",
+            "total_real": "総資産合計"
+        })
+        
+        # 3. 表示する列を整理して並び替え
+        display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金(学費等)", "総資産合計"]
+        
+        # 4. 数値だけカンマ区切りにするフォーマットを適用（日付列は除外）
+        num_format_dict = {col: "{:,.0f} 円" for col in display_cols if col != "日付"}
+        
+        st.dataframe(
+            show[display_cols].style.format(num_format_dict), 
+            use_container_width=True
+        )
     # ==================================================
     # その他詳細（既存機能）
     # ==================================================
