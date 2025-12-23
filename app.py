@@ -16,9 +16,6 @@ st.set_page_config(page_title="💰 Financial Freedom Dashboard", layout="wide")
 # ==================================================
 # 統合グラフ（実績＋シミュレーション）描画関数
 # ==================================================
-# app.py の plot_integrated_sim_chart 関数を上書き
-
-# app.py の plot_integrated_sim_chart 関数内
 def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi_v3_final"):
     fig = go.Figure()
 
@@ -35,10 +32,10 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi
             x=df_sim["date"], y=df_sim["investable_real"],
             mode="lines", name="🔮 予測（真の投資可能資産）",
             line=dict(color="royalblue", width=3, dash="dash"),
-            hovertemplate="日付: %{x|%Y-%m}<br>真の資産: %{y:,.0f} 円<br>※防衛費・Goalsを除く<extra></extra>"
+            hovertemplate="日付: %{x|%Y-%m}<br>真の資産: %{y:,.0f} 円<extra></extra>"
         ))
 
-        # ★支出イベントの可視化
+        # 支出イベント
         events = df_sim[df_sim["outflow"] > 0]
         if not events.empty:
             fig.add_trace(go.Scatter(
@@ -51,47 +48,26 @@ def plot_integrated_sim_chart(df_balance, df_sim, fi_target_asset, chart_key="fi
             ))
 
     # 3. 目標ライン
-    fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red", annotation_text="🏁 FI目標")
+    fig.add_hline(y=float(fi_target_asset), line_dash="dash", line_color="red")
 
-    # ★改善点：レンジスライダーと期間ボタンを追加
+    # ★レンジスライダーの追加
     fig.update_layout(
-        title="🔮 未来予測：真の投資可能資産の推移（生活防衛費除外）",
-        xaxis_title="年月",
-        yaxis_title="金額（円）",
-        hovermode="x unified",
-        height=600,
+        title="🔮 未来予測：真の投資可能資産の推移",
+        xaxis_title="年月", yaxis_title="金額（円）",
+        hovermode="x unified", height=600,
         xaxis=dict(
-            rangeslider=dict(visible=True),
+            rangeslider=dict(visible=True), # これが期間選択バー
             type="date",
             rangeselector=dict(
                 buttons=list([
                     dict(count=2, label="2年", step="year", stepmode="backward"),
                     dict(count=5, label="5年", step="year", stepmode="backward"),
-                    dict(count=10, label="10年", step="year", stepmode="backward"),
                     dict(step="all", label="全期間")
                 ])
             )
         )
     )
     st.plotly_chart(fig, use_container_width=True, key=f"{chart_key}_{datetime.now().microsecond}")
-
-# main関数内の詳細テーブル表示部分（tab2）
-    with tab2:
-        show = df_fi_sim.copy()
-        show["日付"] = show["date"].dt.strftime("%Y-%m")
-        show = show.rename(columns={
-            "investable_real": "投資可能資産(FI判定用)",
-            "nisa_real": "NISA残高(予測)",
-            "emergency_real": "銀行残高(生活費+防衛費)",
-            "goals_fund_real": "Goals準備金",
-            "unpaid_real": "🚨 Goals支払い不足額",
-            "total_real": "総資産合計"
-        })
-        
-        display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金", "🚨 Goals支払い不足額", "総資産合計"]
-        num_format_dict = {col: "{:,.0f} 円" for col in display_cols if col != "日付"}
-        
-        st.dataframe(show[display_cols].style.format(num_format_dict), use_container_width=True)
     
 def plot_goal_pie(title, achieved, total, key=None):
     achieved = float(max(achieved, 0.0))
@@ -261,32 +237,24 @@ def main():
         if not out.empty:
             out["月"] = out["date"].dt.strftime("%Y-%m")
             st.dataframe(out[["月", "outflow_name", "outflow", "unpaid_real"]].rename(columns={"outflow":"支出額", "unpaid_real":"不足額"}), use_container_width=True)
+
     with tab2:
-        # この下の行はすべて、with tab2: から見て右側にズレている必要があります
+        # ★ここを日本語化＆未払い対応
         show = df_fi_sim.copy()
-        
-        # 1. 日付を文字列に変換
         show["日付"] = show["date"].dt.strftime("%Y-%m")
-        
-        # 2. 列名の日本語化
         show = show.rename(columns={
             "investable_real": "投資可能資産(FI判定用)",
             "nisa_real": "NISA残高(予測)",
             "emergency_real": "銀行残高(生活費+防衛費)",
-            "goals_fund_real": "Goals準備金(学費等)",
+            "goals_fund_real": "Goals準備金",
+            "unpaid_real": "🚨 Goals支払い不足額",
             "total_real": "総資産合計"
         })
         
-        # 3. 表示する列を整理して並び替え
-        display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金(学費等)", "総資産合計"]
-        
-        # 4. 数値だけカンマ区切りにするフォーマットを適用
+        display_cols = ["日付", "投資可能資産(FI判定用)", "NISA残高(予測)", "銀行残高(生活費+防衛費)", "Goals準備金", "🚨 Goals支払い不足額", "総資産合計"]
         num_format_dict = {col: "{:,.0f} 円" for col in display_cols if col != "日付"}
         
-        st.dataframe(
-            show[display_cols].style.format(num_format_dict), 
-            use_container_width=True
-        )
+        st.dataframe(show[display_cols].style.format(num_format_dict), use_container_width=True)
     # ==================================================
     # その他詳細（既存機能）
     # ==================================================
