@@ -301,19 +301,26 @@ def main():
 
     # シミュレーション用パラメータ
     real_total_pmt = lg.estimate_realistic_monthly_contribution(df_balance, months=6)
+    # バッファー目標額を計算（月次支出P75 × 設定月数）
+    buffer_target_amount = monthly_p75 * config.BANK_GREEN_BUFFER_MONTHS
     
-    # 銀行：Bank - Goals, Goals：Goals, NISA：NISA
+    # 防衛費(ef_rec)とバッファー目標の、大きい方を「現金積立のゴールライン」とする
+    # （防衛費よりバッファー設定が低い場合もあり得るので、maxを取って安全側に倒す）
+    green_line_threshold = max(emergency_target, buffer_target_amount)
+
     df_fi_sim = lg.simulate_fi_paths(
         today=today, current_age=current_age, end_age=end_age, annual_return=annual_return,
         current_emergency_cash=bank_balance - saved_goals_total,
         current_goals_fund=saved_goals_total,
         current_nisa=nisa_balance,
-        monthly_emergency_save_real=bank_save, # 簡易的にKPI値を採用
+        monthly_emergency_save_real=bank_save,
         monthly_goals_save_real=goals_save_plan_calc,
         monthly_nisa_save_real=nisa_save,
-        fi_target_asset=lg.compute_fi_required_asset(400000, swr_assumption), # 40万仮定
+        fi_target_asset=lg.compute_fi_required_asset(400000, swr_assumption),
         outflows_by_month=outflows_by_month,
-        ef_rec=emergency_target
+        ef_rec=emergency_target,
+        # ★引数追加：現金のゴールライン（これを超えたら現金積立ストップ）
+        green_threshold=green_line_threshold 
     )
 
     # 統合グラフの表示
